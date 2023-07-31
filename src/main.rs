@@ -1,20 +1,34 @@
 use easy_repl::{command, CommandStatus, Repl};
-use std::{cell::RefCell, collections::HashMap};
+use std::io::Write;
+use std::{cell::RefCell, collections::HashMap, fs::File};
+
+// fn upsert_logfile (filename: &str) {
+//
+//
+// }
 
 fn main() {
     let values = RefCell::new(HashMap::new());
     let values_ref = &values;
+    let mut file = File::options()
+        .append(true)
+        .create(true)
+        .open("log")
+        .unwrap();
 
     let mut repl = Repl::builder()
         .add(
             "SET",
             command! {
                 "Set a value",
-                (key: String, value: String) => |key, value| {
+                (key: String, value: String) => |key: String, value: String| {
                     println!("Set {} = {}", key, value);
                     let mut map = values_ref.borrow_mut();
 
-                    map.insert(key, value);
+                    // TODO: how can I avoid cloning the key and value here?
+                    map.insert(key.clone(), value.clone());
+
+                    writeln!(&mut file, "{}={}", key, value).unwrap();
                     Ok(CommandStatus::Done)
                 }
             },
