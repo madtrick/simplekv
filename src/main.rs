@@ -4,6 +4,31 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::{cell::RefCell, collections::HashMap, fs::File};
 
+struct KV {
+    map: HashMap<String, String>,
+}
+
+impl KV {
+    fn new() -> KV {
+        KV {
+            map: HashMap::new(),
+        }
+    }
+
+    fn set(&mut self, key: String, value: String) {
+        // TODO: how can I avoid cloning the key and value here?
+        self.map.insert(key, value);
+    }
+
+    fn get(&self, key: &String) -> Option<&String> {
+        self.map.get(key)
+    }
+
+    fn del(&mut self, key: String) {
+        self.map.remove(&key);
+    }
+}
+
 fn upsert_logfile(filename: &str) -> File {
     File::options()
         .append(true)
@@ -68,15 +93,17 @@ fn launch_webserver() {
 }
 
 fn main() {
-    let map = init_from_logfile("log");
-    let values = RefCell::new(map);
-    let values_ref = &values;
-    let file = RefCell::new(upsert_logfile("log"));
-    let file_ref = &file;
+    // let map = init_from_logfile("log");
+    // let values = RefCell::new(map);
+    // let values_ref = &values;
+    // let file = RefCell::new(upsert_logfile("log"));
+    // let file_ref = &file;
+    let kv = RefCell::new(KV::new());
+    let kv_ref = &kv;
 
-    launch_webserver();
+    // launch_webserver();
 
-    print_logfile("log");
+    // print_logfile("log");
 
     let mut repl = Repl::builder()
         .add(
@@ -85,13 +112,13 @@ fn main() {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
                     println!("Set {} = {}", key, value);
-                    let mut map = values_ref.borrow_mut();
-                    let mut file = file_ref.borrow_mut();
+                    kv_ref.borrow_mut().set(key, value);
+                    // let mut file = file_ref.borrow_mut();
 
                     // TODO: how can I avoid cloning the key and value here?
-                    map.insert(key.clone(), value.clone());
+                    // map.insert(key.clone(), value.clone());
 
-                    writeln!(file, "{}={}", key, value).unwrap();
+                    // writeln!(file, "{}={}", key, value).unwrap();
                     Ok(CommandStatus::Done)
                 }
             },
@@ -100,18 +127,13 @@ fn main() {
             "GET",
             command! {
                 "Get a value",
+                // TODO: replace &key with key
                 (key: String) => |key| {
-                    // TODO: replace &key with key
-                    let map = values_ref.borrow();
-                    let value = map.get(&key);
-
+                    let kv = kv_ref.borrow();
+                    let value = kv.get(&key);
                     match value {
-                        Some(value) => {
-                            println!("Get {} = {}", key, value)
-                        },
-                        None => {
-                            println!("Key not found")
-                        }
+                        Some(expr) => println!("GET {} = {}", key, expr),
+                        None => println!("GET __none__"),
                     }
 
 
@@ -124,12 +146,10 @@ fn main() {
             command! {
                 "Delete a value",
                 (key: String) => |key| {
-                    // TODO: replace &key with key
-                    let mut map = values_ref.borrow_mut();
-                    let mut file = file_ref.borrow_mut();
-                    map.remove(&key)    ;
+                    kv_ref.borrow_mut().del(key);
+                    // let mut file = file_ref.borrow_mut();
 
-                    writeln!(&mut file, "DEL {}", key).unwrap();
+                    // writeln!(&mut file, "DEL {}", key).unwrap();
 
                     Ok(CommandStatus::Done)
                 }
