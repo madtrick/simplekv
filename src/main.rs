@@ -1,6 +1,7 @@
 use easy_repl::{command, CommandStatus, Repl};
 use regex::Regex;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::{cell::RefCell, collections::HashMap, fs::File};
 
 fn upsert_logfile(filename: &str) -> File {
@@ -43,12 +44,27 @@ fn init_from_logfile(filename: &str) -> HashMap<String, String> {
                 println!("Del Key {}", &capture[1]);
                 map.remove(&capture[1]);
             };
-
-            // TODO: understand why I need to pass a reference to println
         }
     });
 
     map
+}
+
+fn launch_webserver() {
+    let listener = TcpListener::bind("localhost:3333").unwrap();
+
+    for stream in listener.incoming() {
+        let mut stream = stream.unwrap();
+
+        let buf_reader = BufReader::new(&mut stream);
+        let http_request: Vec<_> = buf_reader
+            .lines()
+            .map(|result| result.unwrap())
+            .take_while(|line| !line.is_empty())
+            .collect();
+
+        println!("Request: {:#?}", http_request);
+    }
 }
 
 fn main() {
@@ -57,6 +73,8 @@ fn main() {
     let values_ref = &values;
     let file = RefCell::new(upsert_logfile("log"));
     let file_ref = &file;
+
+    launch_webserver();
 
     print_logfile("log");
 
@@ -109,7 +127,7 @@ fn main() {
                     // TODO: replace &key with key
                     let mut map = values_ref.borrow_mut();
                     let mut file = file_ref.borrow_mut();
-                    map.remove(&key);
+                    map.remove(&key)    ;
 
                     writeln!(&mut file, "DEL {}", key).unwrap();
 
