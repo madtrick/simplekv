@@ -9,14 +9,11 @@ struct KV {
 }
 
 impl KV {
-    fn new() -> KV {
-        KV {
-            map: HashMap::new(),
-        }
+    fn new(map: HashMap<String, String>) -> KV {
+        KV { map }
     }
 
     fn set(&mut self, key: String, value: String) {
-        // TODO: how can I avoid cloning the key and value here?
         self.map.insert(key, value);
     }
 
@@ -93,12 +90,10 @@ fn launch_webserver() {
 }
 
 fn main() {
-    // let map = init_from_logfile("log");
-    // let values = RefCell::new(map);
-    // let values_ref = &values;
     // let file = RefCell::new(upsert_logfile("log"));
     // let file_ref = &file;
-    let kv = RefCell::new(KV::new());
+    let map = init_from_logfile("log");
+    let kv = RefCell::new(KV::new(map));
     let kv_ref = &kv;
 
     // launch_webserver();
@@ -114,9 +109,6 @@ fn main() {
                     println!("Set {} = {}", key, value);
                     kv_ref.borrow_mut().set(key, value);
                     // let mut file = file_ref.borrow_mut();
-
-                    // TODO: how can I avoid cloning the key and value here?
-                    // map.insert(key.clone(), value.clone());
 
                     // writeln!(file, "{}={}", key, value).unwrap();
                     Ok(CommandStatus::Done)
