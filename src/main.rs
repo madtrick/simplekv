@@ -26,12 +26,42 @@ impl KV {
     }
 }
 
-fn upsert_logfile(filename: &str) -> File {
+enum Command<'a> {
+    Set { key: &'a str, value: &'a str },
+    Delete { key: &'a str },
+}
+
+struct CommandLog {
+    file: File, // backing file to store the commands
+}
+
+fn __upsert_logfile(filename: &str) -> File {
     File::options()
         .append(true)
         .create(true)
         .open(filename)
         .unwrap()
+}
+
+impl CommandLog {
+    fn new(filename: &str) -> CommandLog {
+        CommandLog {
+            file: __upsert_logfile(filename),
+        }
+    }
+
+    fn append(&mut self, command: Command) {
+        match command {
+            Command::Set { key, value } => {
+                println!("SET KEY {}, VALUE {}", key, value);
+                writeln!(&mut self.file, "{}={}", key, value).unwrap();
+            }
+            Command::Delete { key } => {
+                println!("DELETE KEY {}", key);
+                writeln!(&mut self.file, "DEL {}", key).unwrap();
+            }
+        }
+    }
 }
 
 fn print_logfile(filename: &str) {
@@ -90,9 +120,9 @@ fn launch_webserver() {
 }
 
 fn main() {
-    // let file = RefCell::new(upsert_logfile("log"));
-    // let file_ref = &file;
     let map = init_from_logfile("log");
+    let log = RefCell::new(CommandLog::new("log"));
+    let log_ref = &log;
     let kv = RefCell::new(KV::new(map));
     let kv_ref = &kv;
 
@@ -107,10 +137,17 @@ fn main() {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
                     println!("Set {} = {}", key, value);
-                    kv_ref.borrow_mut().set(key, value);
-                    // let mut file = file_ref.borrow_mut();
-
-                    // writeln!(file, "{}={}", key, value).unwrap();
+                    /*
+                    * I have to clone the key and value because the map inside the KV takes
+                    * ownership of the key and value.
+                    *
+                    * See this response https://stackoverflow.com/a/32403439
+                    *
+                    * Though it might be better from a design point of view to pass a reference
+                    * to the KV and let it do the cloning.
+                    */
+                    kv_ref.borrow_mut().set(key.clone(), value.clone());
+                    log_ref.borrow_mut().append(Command::Set { key: key.as_str(), value: value.as_str() });
                     Ok(CommandStatus::Done)
                 }
             },
@@ -137,11 +174,9 @@ fn main() {
             "DEL",
             command! {
                 "Delete a value",
-                (key: String) => |key| {
-                    kv_ref.borrow_mut().del(key);
-                    // let mut file = file_ref.borrow_mut();
-
-                    // writeln!(&mut file, "DEL {}", key).unwrap();
+                (key: String) => |key: String| {
+                    kv_ref.borrow_mut().del(key.clone());
+                    log_ref.borrow_mut().append(Command::Delete { key: key.as_str() });
 
                     Ok(CommandStatus::Done)
                 }
