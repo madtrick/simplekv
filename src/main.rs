@@ -2,7 +2,15 @@ use easy_repl::{command, CommandStatus, Repl};
 use regex::Regex;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 use std::{cell::RefCell, collections::HashMap, fs::File};
+
+type MessageChannel = (
+    Sender<(Message, ChannelEnd)>,
+    Receiver<(Message, ChannelEnd)>,
+);
 
 struct KV {
     map: HashMap<String, String>,
@@ -26,9 +34,16 @@ impl KV {
     }
 }
 
-enum Command<'a> {
-    Set { key: &'a str, value: &'a str },
-    Delete { key: &'a str },
+#[derive(Debug)]
+enum Command {
+    Set { key: String, value: String },
+    Delete { key: String },
+    Get { key: String },
+}
+
+enum Message {
+    Request(Option<Command>),
+    Response(Option<String>),
 }
 
 struct CommandLog {
@@ -60,24 +75,25 @@ impl CommandLog {
                 println!("DELETE KEY {}", key);
                 writeln!(&mut self.file, "DEL {}", key).unwrap();
             }
+            _ => panic!("Can't log this command"),
         }
     }
 }
 
-fn print_logfile(filename: &str) {
-    // TODO: I wanted to do `File::open(filename)?` but it won't compile. Why?
-    let file = File::open(filename).unwrap();
-    let lines = BufReader::new(file).lines();
-    let regex = Regex::new(r"(\w+)=(\w+)").unwrap();
-
-    lines.for_each(|line| {
-        if let Ok(line) = line {
-            let Some(capture) = regex.captures(line.as_str()) else { return };
-
-            println!("Key {}, Value {}", &capture[1], &capture[2])
-        }
-    })
-}
+// fn print_logfile(filename: &str) {
+//     // TODO: I wanted to do `File::open(filename)?` but it won't compile. Why?
+//     let file = File::open(filename).unwrap();
+//     let lines = BufReader::new(file).lines();
+//     let regex = Regex::new(r"(\w+)=(\w+)").unwrap();
+//
+//     lines.for_each(|line| {
+//         if let Ok(line) = line {
+//             let Some(capture) = regex.captures(line.as_str()) else { return };
+//
+//             println!("Key {}, Value {}", &capture[1], &capture[2])
+//         }
+//     })
+// }
 
 fn init_from_logfile(filename: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
@@ -102,31 +118,153 @@ fn init_from_logfile(filename: &str) -> HashMap<String, String> {
     map
 }
 
-fn launch_webserver() {
+fn launch_webserver(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, ChannelEnd)>) {
     let listener = TcpListener::bind("localhost:3333").unwrap();
 
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
 
         let buf_reader = BufReader::new(&mut stream);
-        let http_request: Vec<_> = buf_reader
-            .lines()
-            .map(|result| result.unwrap())
-            .take_while(|line| !line.is_empty())
-            .collect();
+        let request_line_string = buf_reader.lines().next().unwrap().unwrap();
+        let request_line = request_line_string.as_str();
+        let get_regex = Regex::new(r"GET /get/(\w+) .+").unwrap();
+        let set_regex = Regex::new(r"GET /set/(\w+)/(\w+) .+").unwrap();
+        let delete_regex = Regex::new(r"GET /del/(\w+) .+").unwrap();
 
-        println!("Request: {:#?}", http_request);
+        let contents: String = if let Some(capture) = set_regex.captures(request_line) {
+            println!("Key {}, Value {}", &capture[1], &capture[2]);
+            tx.send((
+                Message::Request(Some(Command::Set {
+                    key: capture[1].to_string(),
+                    value: capture[2].to_string(),
+                })),
+                ChannelEnd::WebServer,
+            ))
+            .unwrap();
+            "SET".to_string()
+        } else if let Some(capture) = get_regex.captures(request_line) {
+            println!("Get Key {}", &capture[1]);
+            tx.send((
+                Message::Request(Some(Command::Get {
+                    key: capture[1].to_string(),
+                })),
+                ChannelEnd::WebServer,
+            ))
+            .unwrap();
+            let ( Message::Response(Some(recv_message)), _ ) = rx.recv().unwrap() else { panic!() };
+            recv_message
+        } else if let Some(capture) = delete_regex.captures(request_line) {
+            println!("Del Key {}", &capture[1]);
+            tx.send((
+                Message::Request(Some(Command::Delete {
+                    key: capture[1].to_string(),
+                })),
+                ChannelEnd::WebServer,
+            ))
+            .unwrap();
+            "DEL".to_string()
+        } else {
+            "UNKNOWN".to_string()
+        };
+
+        let contents_length = contents.len();
+        let response =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {contents_length}\r\n\r\n{contents}");
+
+        println!("{}", response);
+        stream.write_all(response.as_bytes()).unwrap();
+
+        // println!("Request: {:#?}", http_request);
     }
 }
 
-fn main() {
-    let map = init_from_logfile("log");
-    let log = RefCell::new(CommandLog::new("log"));
-    let log_ref = &log;
-    let kv = RefCell::new(KV::new(map));
-    let kv_ref = &kv;
+enum ChannelEnd {
+    WebServer,
+    Repl,
+    KV,
+}
 
-    // launch_webserver();
+fn main() {
+    let (tx_repl, rx_repl): MessageChannel = mpsc::channel();
+    let (tx_server, rx_server): MessageChannel = mpsc::channel();
+    let (tx_kv, rx_kv): MessageChannel = mpsc::channel();
+
+    let tx_kv_webserver = tx_kv.clone();
+    let tx_kv_repl = RefCell::new(tx_kv);
+    let tx_kv_repl_ref = &tx_kv_repl;
+    let rx_repl = RefCell::new(rx_repl);
+    let rx_repl_ref = &rx_repl;
+
+    thread::spawn(move || launch_webserver(tx_kv_webserver, rx_server));
+    thread::spawn(move || {
+        let map = init_from_logfile("log");
+        let log = RefCell::new(CommandLog::new("log"));
+        let log_ref = &log;
+        let kv = RefCell::new(KV::new(map));
+        let kv_ref = &kv;
+
+        for (message, channel) in rx_kv.iter() {
+            let reply_channel = match channel {
+                ChannelEnd::Repl => {
+                    println!("Received message from the Repl");
+                    tx_repl.clone()
+                }
+                ChannelEnd::WebServer => {
+                    println!("Received message from the WebServer");
+                    tx_server.clone()
+                }
+                _ => panic!("Unexpected channel"),
+            };
+
+            match message {
+                Message::Request(Some(Command::Set { key, value })) => {
+                    println!("Set {} = {}", key, value);
+                    /*
+                     * I have to clone the key and value because the map inside the KV takes
+                     * ownership of the key and value.
+                     *
+                     * See this response https://stackoverflow.com/a/32403439
+                     *
+                     * Though it might be better from a design point of view to pass a reference
+                     * to the KV and let it do the cloning.
+                     */
+                    kv_ref.borrow_mut().set(key.clone(), value.clone());
+                    log_ref.borrow_mut().append(Command::Set {
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
+
+                    reply_channel
+                        .send((Message::Response(Some(value.clone())), ChannelEnd::KV))
+                        .unwrap();
+                }
+                Message::Request(Some(Command::Get { key })) => {
+                    let kv = kv_ref.borrow();
+                    let value = kv.get(&key);
+                    let value = match value {
+                        Some(expr) => {
+                            println!("GET {} = {}", key, expr);
+                            expr
+                        }
+                        None => {
+                            println!("GET __none__");
+                            "__none__"
+                        }
+                    };
+
+                    reply_channel
+                        // Note that for now I'm abusing the exisint command also for the reply
+                        .send((Message::Response(Some(value.to_string())), ChannelEnd::KV))
+                        .unwrap();
+                }
+                Message::Request(Some(Command::Delete { key })) => {
+                    kv_ref.borrow_mut().del(key.clone());
+                    log_ref.borrow_mut().append(Command::Delete { key });
+                }
+                _ => panic!("Unexpected message"),
+            }
+        }
+    });
 
     // print_logfile("log");
 
@@ -136,18 +274,8 @@ fn main() {
             command! {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
-                    println!("Set {} = {}", key, value);
-                    /*
-                    * I have to clone the key and value because the map inside the KV takes
-                    * ownership of the key and value.
-                    *
-                    * See this response https://stackoverflow.com/a/32403439
-                    *
-                    * Though it might be better from a design point of view to pass a reference
-                    * to the KV and let it do the cloning.
-                    */
-                    kv_ref.borrow_mut().set(key.clone(), value.clone());
-                    log_ref.borrow_mut().append(Command::Set { key: key.as_str(), value: value.as_str() });
+                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Set { key, value })), ChannelEnd::Repl)).unwrap();
+                    rx_repl_ref.borrow_mut().recv().unwrap();
                     Ok(CommandStatus::Done)
                 }
             },
@@ -158,13 +286,11 @@ fn main() {
                 "Get a value",
                 // TODO: replace &key with key
                 (key: String) => |key| {
-                    let kv = kv_ref.borrow();
-                    let value = kv.get(&key);
-                    match value {
-                        Some(expr) => println!("GET {} = {}", key, expr),
-                        None => println!("GET __none__"),
-                    }
-
+                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Get { key })), ChannelEnd::Repl)).unwrap();
+                    let ( Message::Response(Some(recv_message)), _ ) = rx_repl_ref.borrow_mut().recv().unwrap() else { panic!() };
+                    println!("Received in repl {:?}", recv_message);
+                    // let ( Command::Get{key: key_value}, _ ) = recv_message else { panic!()};
+                    // println!("{}", key_value);
 
                     Ok(CommandStatus::Done)
                 }
@@ -175,8 +301,7 @@ fn main() {
             command! {
                 "Delete a value",
                 (key: String) => |key: String| {
-                    kv_ref.borrow_mut().del(key.clone());
-                    log_ref.borrow_mut().append(Command::Delete { key: key.as_str() });
+                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Delete { key })), ChannelEnd::Repl)).unwrap();
 
                     Ok(CommandStatus::Done)
                 }
