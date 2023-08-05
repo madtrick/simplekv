@@ -1,4 +1,3 @@
-use easy_repl::{command, CommandStatus, Repl};
 use regex::Regex;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -7,6 +6,9 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::{cell::RefCell, collections::HashMap, fs::File};
 
+mod repl;
+
+// TODO try pub(crate)
 type MessageChannel = (
     Sender<(Message, ChannelEnd)>,
     Receiver<(Message, ChannelEnd)>,
@@ -190,11 +192,8 @@ fn main() {
     let (tx_kv, rx_kv): MessageChannel = mpsc::channel();
 
     let tx_kv_webserver = tx_kv.clone();
-    let tx_kv_repl = RefCell::new(tx_kv);
-    let tx_kv_repl_ref = &tx_kv_repl;
-    let rx_repl = RefCell::new(rx_repl);
-    let rx_repl_ref = &rx_repl;
 
+    let repl_thread = thread::spawn(move || crate::repl::start_repl(tx_kv, rx_repl));
     thread::spawn(move || launch_webserver(tx_kv_webserver, rx_server));
     thread::spawn(move || {
         let map = init_from_logfile("log");
@@ -266,49 +265,8 @@ fn main() {
         }
     });
 
+    // Don't exit until the repl thread exits
+    repl_thread.join().unwrap();
+
     // print_logfile("log");
-
-    let mut repl = Repl::builder()
-        .add(
-            "SET",
-            command! {
-                "Set a value",
-                (key: String, value: String) => |key: String, value: String| {
-                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Set { key, value })), ChannelEnd::Repl)).unwrap();
-                    rx_repl_ref.borrow_mut().recv().unwrap();
-                    Ok(CommandStatus::Done)
-                }
-            },
-        )
-        .add(
-            "GET",
-            command! {
-                "Get a value",
-                // TODO: replace &key with key
-                (key: String) => |key| {
-                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Get { key })), ChannelEnd::Repl)).unwrap();
-                    let ( Message::Response(Some(recv_message)), _ ) = rx_repl_ref.borrow_mut().recv().unwrap() else { panic!() };
-                    println!("Received in repl {:?}", recv_message);
-                    // let ( Command::Get{key: key_value}, _ ) = recv_message else { panic!()};
-                    // println!("{}", key_value);
-
-                    Ok(CommandStatus::Done)
-                }
-            },
-        )
-        .add(
-            "DEL",
-            command! {
-                "Delete a value",
-                (key: String) => |key: String| {
-                    tx_kv_repl_ref.borrow_mut().send((Message::Request(Some(Command::Delete { key })), ChannelEnd::Repl)).unwrap();
-
-                    Ok(CommandStatus::Done)
-                }
-            },
-        )
-        .build()
-        .expect("Failed to create repl");
-
-    repl.run().expect("Critical REPL error");
 }
