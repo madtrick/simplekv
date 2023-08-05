@@ -44,8 +44,8 @@ enum Command {
 }
 
 enum Message {
-    Request(Option<Command>),
-    Response(Option<String>),
+    Request(Command),
+    Response(String),
 }
 
 struct CommandLog {
@@ -136,10 +136,10 @@ fn launch_webserver(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, Ch
         let contents: String = if let Some(capture) = set_regex.captures(request_line) {
             println!("Key {}, Value {}", &capture[1], &capture[2]);
             tx.send((
-                Message::Request(Some(Command::Set {
+                Message::Request(Command::Set {
                     key: capture[1].to_string(),
                     value: capture[2].to_string(),
-                })),
+                }),
                 ChannelEnd::WebServer,
             ))
             .unwrap();
@@ -147,20 +147,20 @@ fn launch_webserver(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, Ch
         } else if let Some(capture) = get_regex.captures(request_line) {
             println!("Get Key {}", &capture[1]);
             tx.send((
-                Message::Request(Some(Command::Get {
+                Message::Request(Command::Get {
                     key: capture[1].to_string(),
-                })),
+                }),
                 ChannelEnd::WebServer,
             ))
             .unwrap();
-            let ( Message::Response(Some(recv_message)), _ ) = rx.recv().unwrap() else { panic!() };
+            let ( Message::Response(recv_message), _ ) = rx.recv().unwrap() else { panic!() };
             recv_message
         } else if let Some(capture) = delete_regex.captures(request_line) {
             println!("Del Key {}", &capture[1]);
             tx.send((
-                Message::Request(Some(Command::Delete {
+                Message::Request(Command::Delete {
                     key: capture[1].to_string(),
-                })),
+                }),
                 ChannelEnd::WebServer,
             ))
             .unwrap();
@@ -175,8 +175,6 @@ fn launch_webserver(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, Ch
 
         println!("{}", response);
         stream.write_all(response.as_bytes()).unwrap();
-
-        // println!("Request: {:#?}", http_request);
     }
 }
 
@@ -216,7 +214,7 @@ fn main() {
             };
 
             match message {
-                Message::Request(Some(Command::Set { key, value })) => {
+                Message::Request(Command::Set { key, value }) => {
                     println!("Set {} = {}", key, value);
                     /*
                      * I have to clone the key and value because the map inside the KV takes
@@ -234,10 +232,10 @@ fn main() {
                     });
 
                     reply_channel
-                        .send((Message::Response(Some(value.clone())), ChannelEnd::KV))
+                        .send((Message::Response(value.clone()), ChannelEnd::KV))
                         .unwrap();
                 }
-                Message::Request(Some(Command::Get { key })) => {
+                Message::Request(Command::Get { key }) => {
                     let kv = kv_ref.borrow();
                     let value = kv.get(&key);
                     let value = match value {
@@ -253,10 +251,10 @@ fn main() {
 
                     reply_channel
                         // Note that for now I'm abusing the exisint command also for the reply
-                        .send((Message::Response(Some(value.to_string())), ChannelEnd::KV))
+                        .send((Message::Response(value.to_string()), ChannelEnd::KV))
                         .unwrap();
                 }
-                Message::Request(Some(Command::Delete { key })) => {
+                Message::Request(Command::Delete { key }) => {
                     kv_ref.borrow_mut().del(key.clone());
                     log_ref.borrow_mut().append(Command::Delete { key });
                 }
@@ -267,6 +265,4 @@ fn main() {
 
     // Don't exit until the repl thread exits
     repl_thread.join().unwrap();
-
-    // print_logfile("log");
 }
