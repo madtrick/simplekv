@@ -178,10 +178,32 @@ fn launch_webserver(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, Ch
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
 enum ChannelEnd {
     WebServer,
     Repl,
     KV,
+}
+
+struct Dispatcher {
+    map: HashMap<ChannelEnd, Sender<(Message, ChannelEnd)>>,
+}
+
+impl Dispatcher {
+    fn new() -> Self {
+        Dispatcher {
+            map: HashMap::new(),
+        }
+    }
+
+    fn register(&mut self, end: ChannelEnd, sender: Sender<(Message, ChannelEnd)>) {
+        self.map.insert(end, sender);
+    }
+
+    fn dispatch(&mut self, from: ChannelEnd, to: ChannelEnd, message: Message) {
+        let sender = self.map.get(&to).unwrap();
+        sender.send((message, from)).unwrap();
+    }
 }
 
 fn main() {
@@ -199,20 +221,12 @@ fn main() {
         let log_ref = &log;
         let kv = RefCell::new(KV::new(map));
         let kv_ref = &kv;
+        let mut dispatcher = Dispatcher::new();
+
+        dispatcher.register(ChannelEnd::Repl, tx_repl.clone());
+        dispatcher.register(ChannelEnd::WebServer, tx_server.clone());
 
         for (message, channel) in rx_kv.iter() {
-            let reply_channel = match channel {
-                ChannelEnd::Repl => {
-                    println!("Received message from the Repl");
-                    tx_repl.clone()
-                }
-                ChannelEnd::WebServer => {
-                    println!("Received message from the WebServer");
-                    tx_server.clone()
-                }
-                _ => panic!("Unexpected channel"),
-            };
-
             match message {
                 Message::Request(Command::Set { key, value }) => {
                     println!("Set {} = {}", key, value);
@@ -231,9 +245,7 @@ fn main() {
                         value: value.clone(),
                     });
 
-                    reply_channel
-                        .send((Message::Response(value.clone()), ChannelEnd::KV))
-                        .unwrap();
+                    dispatcher.dispatch(ChannelEnd::KV, channel, Message::Response(value.clone()));
                 }
                 Message::Request(Command::Get { key }) => {
                     let kv = kv_ref.borrow();
@@ -249,10 +261,11 @@ fn main() {
                         }
                     };
 
-                    reply_channel
-                        // Note that for now I'm abusing the exisint command also for the reply
-                        .send((Message::Response(value.to_string()), ChannelEnd::KV))
-                        .unwrap();
+                    dispatcher.dispatch(
+                        ChannelEnd::KV,
+                        channel,
+                        Message::Response(value.to_string()),
+                    );
                 }
                 Message::Request(Command::Delete { key }) => {
                     kv_ref.borrow_mut().del(key.clone());
