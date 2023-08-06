@@ -239,11 +239,11 @@ fn main() {
                      * Though it might be better from a design point of view to pass a reference
                      * to the KV and let it do the cloning.
                      */
-                    kv_ref.borrow_mut().set(key.clone(), value.clone());
                     log_ref.borrow_mut().append(Command::Set {
                         key: key.clone(),
                         value: value.clone(),
                     });
+                    kv_ref.borrow_mut().set(key.clone(), value.clone());
 
                     dispatcher.dispatch(ChannelEnd::KV, channel, Message::Response(value.clone()));
                 }
@@ -268,8 +268,10 @@ fn main() {
                     );
                 }
                 Message::Request(Command::Delete { key }) => {
-                    kv_ref.borrow_mut().del(key.clone());
-                    log_ref.borrow_mut().append(Command::Delete { key });
+                    log_ref
+                        .borrow_mut()
+                        .append(Command::Delete { key: key.clone() });
+                    kv_ref.borrow_mut().del(key);
                 }
                 _ => panic!("Unexpected message"),
             }
