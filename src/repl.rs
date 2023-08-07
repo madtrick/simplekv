@@ -8,6 +8,8 @@ use std::{
 pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, ChannelEnd)>) {
     let tx_cell = RefCell::new(tx);
     let tx_ref = &tx_cell;
+    let rx_cell = RefCell::new(rx);
+    let rx_ref = &rx_cell;
 
     let mut repl = Repl::builder()
         .add(
@@ -16,6 +18,7 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
                     tx_ref.borrow_mut().send((Message::Request(Command::Set { key, value }), ChannelEnd::Repl)).unwrap();
+                    // rx_ref.borrow_mut().recv().unwrap();
                     Ok(CommandStatus::Done)
                 }
             },
@@ -26,7 +29,7 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
                 "Get a value",
                 (key: String) => |key| {
                     tx_ref.borrow_mut().send((Message::Request(Command::Get { key }), ChannelEnd::Repl)).unwrap();
-                    let ( Message::Response(value), _ ) = rx.recv().unwrap() else { panic!() };
+                    let ( Message::Response(value), _ ) = rx_ref.borrow_mut().recv().unwrap() else { panic!() };
 
                     println!("{}", value);
 

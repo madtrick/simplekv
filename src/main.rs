@@ -1,6 +1,9 @@
 mod command_log;
+
+use clap::Parser;
 use command_log::CommandLog;
 use regex::Regex;
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -67,7 +70,12 @@ enum Message {
 
 fn init_from_logfile(filename: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let file = File::open(filename).unwrap();
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(filename)
+        .unwrap();
     let lines = BufReader::new(file).lines();
     let set_regex = Regex::new(r"(\w+)=(\w+)").unwrap();
     let del_regex = Regex::new(r"DEL (\w+)").unwrap();
@@ -174,7 +182,17 @@ impl Dispatcher {
     }
 }
 
+#[derive(Parser)]
+struct Args {
+    // Id of the KV node
+    #[arg(long)]
+    id: String,
+}
+
 fn main() {
+    let args = Args::parse();
+    let node_id = args.id;
+
     let (tx_repl, rx_repl): MessageChannel = mpsc::channel();
     let (tx_server, rx_server): MessageChannel = mpsc::channel();
     let (tx_kv, rx_kv): MessageChannel = mpsc::channel();
@@ -184,8 +202,9 @@ fn main() {
     let repl_thread = thread::spawn(move || crate::repl::start_repl(tx_kv, rx_repl));
     thread::spawn(move || launch_webserver(tx_kv_webserver, rx_server));
     thread::spawn(move || {
-        let map = init_from_logfile("log");
-        let log = RefCell::new(CommandLog::new("log"));
+        let log_name = format!("log.{node_id}");
+        let map = init_from_logfile(&log_name);
+        let log = RefCell::new(CommandLog::new(&log_name));
         let log_ref = &log;
         let kv = RefCell::new(KV::new(map));
         let kv_ref = &kv;
