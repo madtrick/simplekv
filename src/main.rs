@@ -1,3 +1,5 @@
+mod command_log;
+use command_log::CommandLog;
 use regex::Regex;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -46,40 +48,6 @@ enum Command {
 enum Message {
     Request(Command),
     Response(String),
-}
-
-struct CommandLog {
-    file: File, // backing file to store the commands
-}
-
-fn __upsert_logfile(filename: &str) -> File {
-    File::options()
-        .append(true)
-        .create(true)
-        .open(filename)
-        .unwrap()
-}
-
-impl CommandLog {
-    fn new(filename: &str) -> CommandLog {
-        CommandLog {
-            file: __upsert_logfile(filename),
-        }
-    }
-
-    fn append(&mut self, command: Command) {
-        match command {
-            Command::Set { key, value } => {
-                println!("SET KEY {}, VALUE {}", key, value);
-                writeln!(&mut self.file, "{}={}", key, value).unwrap();
-            }
-            Command::Delete { key } => {
-                println!("DELETE KEY {}", key);
-                writeln!(&mut self.file, "DEL {}", key).unwrap();
-            }
-            _ => panic!("Can't log this command"),
-        }
-    }
 }
 
 // fn print_logfile(filename: &str) {
