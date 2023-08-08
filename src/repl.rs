@@ -2,6 +2,8 @@ use crate::{ChannelEnd, Command, Message};
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
+    io::Write,
+    net::TcpStream,
     sync::mpsc::{Receiver, Sender},
 };
 
@@ -11,13 +13,16 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
     let rx_cell = RefCell::new(rx);
     let rx_ref = &rx_cell;
 
+    let mut stream = TcpStream::connect("localhost:1337").unwrap();
+
     let mut repl = Repl::builder()
         .add(
             "SET",
             command! {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
-                    tx_ref.borrow_mut().send((Message::Request(Command::Set { key, value }), ChannelEnd::Repl)).unwrap();
+                    stream.write_all(b"SET k 2\n").unwrap();
+                    // tx_ref.borrow_mut().send((Message::Request(Command::Set { key, value }), ChannelEnd::Repl)).unwrap();
                     // rx_ref.borrow_mut().recv().unwrap();
                     Ok(CommandStatus::Done)
                 }

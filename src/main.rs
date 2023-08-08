@@ -1,7 +1,9 @@
 mod command_log;
+mod kv;
 
 use clap::Parser;
 use command_log::CommandLog;
+use kv::{start_kv_server, KV};
 use regex::Regex;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
@@ -9,7 +11,7 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
-use std::{cell::RefCell, collections::HashMap, fs::File};
+use std::{cell::RefCell, collections::HashMap};
 
 mod repl;
 
@@ -18,28 +20,6 @@ type MessageChannel = (
     Sender<(Message, ChannelEnd)>,
     Receiver<(Message, ChannelEnd)>,
 );
-
-struct KV {
-    map: HashMap<String, String>,
-}
-
-impl KV {
-    fn new(map: HashMap<String, String>) -> KV {
-        KV { map }
-    }
-
-    fn set(&mut self, key: String, value: String) {
-        self.map.insert(key, value);
-    }
-
-    fn get(&self, key: &String) -> Option<&String> {
-        self.map.get(key)
-    }
-
-    fn del(&mut self, key: String) {
-        self.map.remove(&key);
-    }
-}
 
 #[derive(Debug)]
 enum Command {
@@ -200,6 +180,7 @@ fn main() {
     let tx_kv_webserver = tx_kv.clone();
 
     let repl_thread = thread::spawn(move || crate::repl::start_repl(tx_kv, rx_repl));
+    thread::spawn(start_kv_server);
     thread::spawn(move || launch_webserver(tx_kv_webserver, rx_server));
     thread::spawn(move || {
         let log_name = format!("log.{node_id}");
