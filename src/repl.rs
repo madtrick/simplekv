@@ -2,7 +2,7 @@ use crate::{ChannelEnd, Command, Message};
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
-    io::Write,
+    io::{Write, BufReader, BufRead},
     net::TcpStream,
     sync::mpsc::{Receiver, Sender},
 };
@@ -13,7 +13,11 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
     let rx_cell = RefCell::new(rx);
     let rx_ref = &rx_cell;
 
-    let mut stream = TcpStream::connect("localhost:1337").unwrap();
+    // TODO: the connection might be refused if the server thread was scheduled later than the repl
+    // thread
+    let stream = RefCell::new(TcpStream::connect("localhost:1337").unwrap());
+    let stream_ref = &stream;
+    let mut reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
 
     let mut repl = Repl::builder()
         .add(
@@ -21,7 +25,8 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
             command! {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
-                    stream.write_all(b"SET k 2\n").unwrap();
+                    // TODO: can I pass a Message to write_all and have it serialized as a vector?
+                    stream_ref.borrow_mut().write_all(format!("SET {key} {value}\n").as_bytes()).unwrap();
                     // tx_ref.borrow_mut().send((Message::Request(Command::Set { key, value }), ChannelEnd::Repl)).unwrap();
                     // rx_ref.borrow_mut().recv().unwrap();
                     Ok(CommandStatus::Done)
@@ -33,8 +38,14 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
             command! {
                 "Get a value",
                 (key: String) => |key| {
-                    tx_ref.borrow_mut().send((Message::Request(Command::Get { key }), ChannelEnd::Repl)).unwrap();
-                    let ( Message::Response(value), _ ) = rx_ref.borrow_mut().recv().unwrap() else { panic!() };
+                    stream_ref.borrow_mut().write_all(format!("GET {key}\n").as_bytes()).unwrap();
+                    // tx_ref.borrow_mut().send((Message::Request(Command::Get { key }), ChannelEnd::Repl)).unwrap();
+                    // let ( Message::Response(value), _ ) = rx_ref.borrow_mut().recv().unwrap() else { panic!() };
+
+                    
+                    let mut value = String::new();
+                    reader.read_line(&mut value).unwrap();
+
 
                     println!("{}", value);
 
