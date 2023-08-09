@@ -87,7 +87,7 @@ fn main() {
     let args = Args::parse();
     let node_id = args.id;
 
-    thread::spawn(start_kv_server);
+    thread::spawn(move || start_kv_server(&node_id));
     // Give some time for the server to start so that the repl and the webserver can open a
     // connection
     thread::sleep(Duration::new(1, 0));

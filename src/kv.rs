@@ -5,6 +5,9 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
+use crate::command_log::{self, CommandLog};
+use crate::Command;
+
 pub(crate) struct KV {
     map: HashMap<String, String>,
 }
@@ -22,8 +25,9 @@ impl KV {
         self.map.get(key)
     }
 
-    pub fn del(&mut self, key: String) {
-        self.map.remove(&key);
+    // TODO take a &str instead
+    pub fn del(&mut self, key: &String) {
+        self.map.remove(key);
     }
 }
 
@@ -40,13 +44,14 @@ fn is_del_command(input: &str, regex: &Regex) -> Option<String> {
     regex.captures(input).map(|capture| capture[1].to_owned())
 }
 
-pub fn start_kv_server() {
+pub fn start_kv_server(node_id: &str) {
     // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
     let get_regex = Arc::new(Regex::new(r"GET (\w+)").unwrap());
     let set_regex = Arc::new(Regex::new(r"SET (\w+) (\w+)").unwrap());
     let delete_regex = Arc::new(Regex::new(r"DEL (\w+)").unwrap());
     let kv = Arc::new(RwLock::new(KV::new(HashMap::new())));
+    let command_log = Arc::new(RwLock::new(CommandLog::new(&format!("log.{node_id}"))));
     // let kv_ref = &kv;
 
     for stream in listener.incoming() {
@@ -57,6 +62,7 @@ pub fn start_kv_server() {
          * let the thread closure move this clone
          */
         let kv = kv.clone();
+        let command_log = command_log.clone();
         let get_regex = get_regex.clone();
         let delete_regex = delete_regex.clone();
         let set_regex = set_regex.clone();
@@ -74,6 +80,10 @@ pub fn start_kv_server() {
 
                 if let Some((key, value)) = is_set_command(&request_line_string, &set_regex) {
                     println!("KV server: SET {} = {}", key, value);
+                    command_log.write().unwrap().append(Command::Set {
+                        key: key.clone(),
+                        value: value.clone(),
+                    });
                     kv.write().unwrap().set(key, value)
                 } else if let Some(key) = is_get_command(&request_line_string, &get_regex) {
                     println!("KV server: GET {}", key);
@@ -87,7 +97,11 @@ pub fn start_kv_server() {
                     }
                 } else if let Some(key) = is_del_command(&request_line_string, &delete_regex) {
                     println!("KV server: DEL {}", key);
-                    kv.write().unwrap().del(key);
+                    command_log
+                        .write()
+                        .unwrap()
+                        .append(Command::Delete { key: key.clone() });
+                    kv.write().unwrap().del(&key);
                 } else {
                     println!("KV server: uknown command {}", request_line_string)
                 }
