@@ -1,6 +1,8 @@
 use regex::Regex;
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::{Arc, RwLock};
+use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
 pub(crate) struct KV {
@@ -41,42 +43,57 @@ fn is_del_command(input: &str, regex: &Regex) -> Option<String> {
 pub fn start_kv_server() {
     // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
-    let get_regex = Regex::new(r"GET (\w+)").unwrap();
-    let set_regex = Regex::new(r"SET (\w+) (\w+)").unwrap();
-    let delete_regex = Regex::new(r"DEL (\w+)").unwrap();
-    let kv = RefCell::new(KV::new(HashMap::new()));
-    let kv_ref = &kv;
+    let get_regex = Arc::new(Regex::new(r"GET (\w+)").unwrap());
+    let set_regex = Arc::new(Regex::new(r"SET (\w+) (\w+)").unwrap());
+    let delete_regex = Arc::new(Regex::new(r"DEL (\w+)").unwrap());
+    let kv = Arc::new(RwLock::new(KV::new(HashMap::new())));
+    // let kv_ref = &kv;
 
     for stream in listener.incoming() {
         println!("KV server: Accepted connection");
-        let stream = RefCell::new(stream.unwrap());
-        let stream_ref = &stream;
-        // TODO understand why "stream_ref.borrow_mut" fails but "stream_ref.borrow_mut.try_clone"
-        // works
-        let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
+        let stream = stream.unwrap();
+        /*
+         * Clone the Arc to increase the refererence count and also
+         * let the thread closure move this clone
+         */
+        let kv = kv.clone();
+        let get_regex = get_regex.clone();
+        let delete_regex = delete_regex.clone();
+        let set_regex = set_regex.clone();
 
-        for line in buf_reader.lines() {
-            let request_line_string = line.unwrap();
+        thread::spawn(move || {
+            let stream = RefCell::new(stream);
+            let stream_ref = &stream;
+            // TODO understand why "stream_ref.borrow_mut" fails but "stream_ref.borrow_mut.try_clone"
+            // works
+            let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
 
-            if let Some((key, value)) = is_set_command(&request_line_string, &set_regex) {
-                println!("KV server: SET {} = {}", key, value);
-                kv_ref.borrow_mut().set(key, value)
-            } else if let Some(key) = is_get_command(&request_line_string, &get_regex) {
-                println!("KV server: GET {}", key);
+            // TODO there should be only one line. No need to iterate.
+            for line in buf_reader.lines() {
+                let request_line_string = line.unwrap();
 
-                match kv_ref.borrow().get(&key) {
-                    Some(value) => stream_ref
-                        .borrow_mut()
-                        .write_all(format!("{value}\n").as_bytes())
-                        .unwrap(),
-                    None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                if let Some((key, value)) = is_set_command(&request_line_string, &set_regex) {
+                    println!("KV server: SET {} = {}", key, value);
+                    kv.write().unwrap().set(key, value)
+                } else if let Some(key) = is_get_command(&request_line_string, &get_regex) {
+                    println!("KV server: GET {}", key);
+
+                    match kv.read().unwrap().get(&key) {
+                        Some(value) => stream_ref
+                            .borrow_mut()
+                            .write_all(format!("{value}\n").as_bytes())
+                            .unwrap(),
+                        None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                    }
+                } else if let Some(key) = is_del_command(&request_line_string, &delete_regex) {
+                    println!("KV server: DEL {}", key);
+                    kv.write().unwrap().del(key);
+                } else {
+                    println!("KV server: uknown command {}", request_line_string)
                 }
-            } else if let Some(key) = is_del_command(&request_line_string, &delete_regex) {
-                println!("KV server: DEL {}", key);
-                kv_ref.borrow_mut().del(key);
-            } else {
-                println!("KV server: uknown command {}", request_line_string)
             }
-        }
+        });
+
+        // handle.join();
     }
 }

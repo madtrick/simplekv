@@ -1,18 +1,12 @@
-use crate::{ChannelEnd, Command, Message};
+use crate::{Command, Message};
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
     io::{Write, BufReader, BufRead},
     net::TcpStream,
-    sync::mpsc::{Receiver, Sender},
 };
 
-pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Message, ChannelEnd)>) {
-    let tx_cell = RefCell::new(tx);
-    let tx_ref = &tx_cell;
-    let rx_cell = RefCell::new(rx);
-    let rx_ref = &rx_cell;
-
+pub(crate) fn start_repl() {
     // TODO: the connection might be refused if the server thread was scheduled later than the repl
     // thread
     let stream = RefCell::new(TcpStream::connect("localhost:1337").unwrap());
