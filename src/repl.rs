@@ -58,7 +58,8 @@ pub(crate) fn start_repl(tx: Sender<(Message, ChannelEnd)>, rx: Receiver<(Messag
             command! {
                 "Delete a value",
                 (key: String) => |key: String| {
-                    tx_ref.borrow_mut().send((Message::Request(Command::Delete { key }), ChannelEnd::Repl)).unwrap();
+                    stream_ref.borrow_mut().write_all(format!("DEL {key}\n").as_bytes()).unwrap();
+                    // tx_ref.borrow_mut().send((Message::Request(Command::Delete { key }), ChannelEnd::Repl)).unwrap();
 
                     Ok(CommandStatus::Done)
                 }

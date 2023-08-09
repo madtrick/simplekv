@@ -32,17 +32,20 @@ fn is_set_command(input: &str, regex: &Regex) -> Option<(String, String)> {
 }
 
 fn is_get_command(input: &str, regex: &Regex) -> Option<String> {
-    regex.captures(input).map(|capture| capture[0].to_owned())
+    regex.captures(input).map(|capture| capture[1].to_owned())
 }
 fn is_del_command(input: &str, regex: &Regex) -> Option<String> {
-    regex.captures(input).map(|capture| capture[0].to_owned())
+    regex.captures(input).map(|capture| capture[1].to_owned())
 }
 
 pub fn start_kv_server() {
+    // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
     let get_regex = Regex::new(r"GET (\w+)").unwrap();
     let set_regex = Regex::new(r"SET (\w+) (\w+)").unwrap();
     let delete_regex = Regex::new(r"DEL (\w+)").unwrap();
+    let kv = RefCell::new(KV::new(HashMap::new()));
+    let kv_ref = &kv;
 
     for stream in listener.incoming() {
         println!("KV server: Accepted connection");
@@ -57,11 +60,20 @@ pub fn start_kv_server() {
 
             if let Some((key, value)) = is_set_command(&request_line_string, &set_regex) {
                 println!("KV server: SET {} = {}", key, value);
+                kv_ref.borrow_mut().set(key, value)
             } else if let Some(key) = is_get_command(&request_line_string, &get_regex) {
                 println!("KV server: GET {}", key);
-                stream_ref.borrow_mut().write_all(b"44\n").unwrap();
+
+                match kv_ref.borrow().get(&key) {
+                    Some(value) => stream_ref
+                        .borrow_mut()
+                        .write_all(format!("{value}\n").as_bytes())
+                        .unwrap(),
+                    None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                }
             } else if let Some(key) = is_del_command(&request_line_string, &delete_regex) {
                 println!("KV server: DEL {}", key);
+                kv_ref.borrow_mut().del(key);
             } else {
                 println!("KV server: uknown command {}", request_line_string)
             }
