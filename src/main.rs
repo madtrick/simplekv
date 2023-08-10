@@ -6,6 +6,7 @@ use clap::Parser;
 use kv::start_kv_server;
 use regex::Regex;
 use repl::start_repl;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
@@ -15,22 +16,11 @@ use webserver::launch_webserver;
 
 mod repl;
 
-// TODO try pub(crate)
-// type MessageChannel = (
-//     Sender<(Message, ChannelEnd)>,
-//     Receiver<(Message, ChannelEnd)>,
-// );
-
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 enum Command {
     Set { key: String, value: String },
     Delete { key: String },
     Get { key: String },
-}
-
-enum Message {
-    Request(Command),
-    Response(String),
 }
 
 // fn print_logfile(filename: &str) {

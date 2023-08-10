@@ -1,8 +1,8 @@
-use crate::{Command, Message};
+use crate::Command;
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
-    io::{Write, BufReader, BufRead},
+    io::{BufRead, BufReader, Write},
     net::TcpStream,
 };
 
@@ -19,10 +19,10 @@ pub(crate) fn start_repl() {
             command! {
                 "Set a value",
                 (key: String, value: String) => |key: String, value: String| {
-                    // TODO: can I pass a Message to write_all and have it serialized as a vector?
-                    stream_ref.borrow_mut().write_all(format!("SET {key} {value}\n").as_bytes()).unwrap();
-                    // tx_ref.borrow_mut().send((Message::Request(Command::Set { key, value }), ChannelEnd::Repl)).unwrap();
-                    // rx_ref.borrow_mut().recv().unwrap();
+                    // I have to finish the string with a \n because the receiving end is expecting
+                    // a breakline terminated string
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Set { key, value }).unwrap()).as_bytes()).unwrap();
+
                     Ok(CommandStatus::Done)
                 }
             },
@@ -32,11 +32,8 @@ pub(crate) fn start_repl() {
             command! {
                 "Get a value",
                 (key: String) => |key| {
-                    stream_ref.borrow_mut().write_all(format!("GET {key}\n").as_bytes()).unwrap();
-                    // tx_ref.borrow_mut().send((Message::Request(Command::Get { key }), ChannelEnd::Repl)).unwrap();
-                    // let ( Message::Response(value), _ ) = rx_ref.borrow_mut().recv().unwrap() else { panic!() };
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Get { key }).unwrap()).as_bytes()).unwrap();
 
-                    
                     let mut value = String::new();
                     reader.read_line(&mut value).unwrap();
 
@@ -52,8 +49,7 @@ pub(crate) fn start_repl() {
             command! {
                 "Delete a value",
                 (key: String) => |key: String| {
-                    stream_ref.borrow_mut().write_all(format!("DEL {key}\n").as_bytes()).unwrap();
-                    // tx_ref.borrow_mut().send((Message::Request(Command::Delete { key }), ChannelEnd::Repl)).unwrap();
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Delete { key }).unwrap()).as_bytes()).unwrap();
 
                     Ok(CommandStatus::Done)
                 }

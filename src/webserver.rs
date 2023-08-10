@@ -1,3 +1,4 @@
+use crate::Command;
 use regex::Regex;
 use std::net::TcpListener;
 use std::{
@@ -24,55 +25,50 @@ pub(crate) fn launch_webserver() {
         let delete_regex = Regex::new(r"GET /del/(\w+) .+").unwrap();
 
         let contents: String = if let Some(capture) = set_regex.captures(request_line) {
-            let key = &capture[1];
-            let value = &capture[2];
+            let key = capture[1].to_string();
+            let value = capture[2].to_string();
 
             kv_stream_ref
                 .borrow_mut()
-                .write_all(format!("SET {key} {value}\n").as_bytes())
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::to_string(&Command::Set { key, value }).unwrap()
+                    )
+                    .as_bytes(),
+                )
                 .unwrap();
-            // tx.send((
-            //     Message::Request(Command::Set {
-            //         key: capture[1].to_string(),
-            //         value: capture[2].to_string(),
-            //     }),
-            //     ChannelEnd::WebServer,
-            // ))
-            // .unwrap();
             "SET".to_string()
         } else if let Some(capture) = get_regex.captures(request_line) {
-            let key = &capture[1];
+            let key = capture[1].to_string();
             kv_stream_ref
                 .borrow_mut()
-                .write_all(format!("GET {key}\n").as_bytes())
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::to_string(&Command::Get { key }).unwrap()
+                    )
+                    .as_bytes(),
+                )
                 .unwrap();
-            // tx_ref.borrow_mut().send((Message::Request(Command::Get { key }), ChannelEnd::Repl)).unwrap();
-            // let ( Message::Response(value), _ ) = rx_ref.borrow_mut().recv().unwrap() else { panic!() };
 
             let mut value = String::new();
             reader.read_line(&mut value).unwrap();
-            // tx.send((
-            //     Message::Request(Command::Get {
-            //         key: capture[1].to_string(),
-            //     }),
-            //     ChannelEnd::WebServer,
-            // ))
-            // .unwrap();
-            // let ( Message::Response(recv_message), _ ) = rx.recv().unwrap() else { panic!() };
+
             value
         } else if let Some(capture) = delete_regex.captures(request_line) {
-            let key = &capture[1];
+            let key = capture[1].to_string();
             kv_stream_ref
                 .borrow_mut()
-                .write_all(format!("DEL {key}\n").as_bytes())
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::to_string(&Command::Delete { key }).unwrap()
+                    )
+                    .as_bytes(),
+                )
                 .unwrap();
-            // tx.send((
-            //     Message::Request(Command::Delete {
-            //         key: capture[1].to_string(),
-            //     }),
-            //     ChannelEnd::WebServer,
-            // ))
-            // .unwrap();
+
             "DEL".to_string()
         } else {
             "UNKNOWN".to_string()

@@ -31,25 +31,9 @@ impl KV {
     }
 }
 
-fn is_set_command(input: &str, regex: &Regex) -> Option<(String, String)> {
-    regex
-        .captures(input)
-        .map(|capture| (capture[1].to_owned(), capture[2].to_owned()))
-}
-
-fn is_get_command(input: &str, regex: &Regex) -> Option<String> {
-    regex.captures(input).map(|capture| capture[1].to_owned())
-}
-fn is_del_command(input: &str, regex: &Regex) -> Option<String> {
-    regex.captures(input).map(|capture| capture[1].to_owned())
-}
-
 pub fn start_kv_server(node_id: &str) {
     // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
-    let get_regex = Arc::new(Regex::new(r"GET (\w+)").unwrap());
-    let set_regex = Arc::new(Regex::new(r"SET (\w+) (\w+)").unwrap());
-    let delete_regex = Arc::new(Regex::new(r"DEL (\w+)").unwrap());
     let kv = Arc::new(RwLock::new(KV::new(HashMap::new())));
     let command_log = Arc::new(RwLock::new(CommandLog::new(&format!("log.{node_id}"))));
     // let kv_ref = &kv;
@@ -63,9 +47,6 @@ pub fn start_kv_server(node_id: &str) {
          */
         let kv = kv.clone();
         let command_log = command_log.clone();
-        let get_regex = get_regex.clone();
-        let delete_regex = delete_regex.clone();
-        let set_regex = set_regex.clone();
 
         thread::spawn(move || {
             let stream = RefCell::new(stream);
@@ -77,33 +58,38 @@ pub fn start_kv_server(node_id: &str) {
             // TODO there should be only one line. No need to iterate.
             for line in buf_reader.lines() {
                 let request_line_string = line.unwrap();
+                println!("MESSAGE {}", request_line_string);
+                let command = serde_json::from_str::<Command>(&request_line_string).unwrap();
+                println!("{:?}", command);
 
-                if let Some((key, value)) = is_set_command(&request_line_string, &set_regex) {
-                    println!("KV server: SET {} = {}", key, value);
-                    command_log.write().unwrap().append(Command::Set {
-                        key: key.clone(),
-                        value: value.clone(),
-                    });
-                    kv.write().unwrap().set(key, value)
-                } else if let Some(key) = is_get_command(&request_line_string, &get_regex) {
-                    println!("KV server: GET {}", key);
-
-                    match kv.read().unwrap().get(&key) {
-                        Some(value) => stream_ref
-                            .borrow_mut()
-                            .write_all(format!("{value}\n").as_bytes())
-                            .unwrap(),
-                        None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                match command {
+                    Command::Set { key, value } => {
+                        println!("KV server: SET {} = {}", key, value);
+                        command_log.write().unwrap().append(Command::Set {
+                            key: key.clone(),
+                            value: value.clone(),
+                        });
+                        kv.write().unwrap().set(key, value)
                     }
-                } else if let Some(key) = is_del_command(&request_line_string, &delete_regex) {
-                    println!("KV server: DEL {}", key);
-                    command_log
-                        .write()
-                        .unwrap()
-                        .append(Command::Delete { key: key.clone() });
-                    kv.write().unwrap().del(&key);
-                } else {
-                    println!("KV server: uknown command {}", request_line_string)
+                    Command::Get { key } => {
+                        println!("KV server: GET {}", key);
+
+                        match kv.read().unwrap().get(&key) {
+                            Some(value) => stream_ref
+                                .borrow_mut()
+                                .write_all(format!("{value}\n").as_bytes())
+                                .unwrap(),
+                            None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                        }
+                    }
+                    Command::Delete { key } => {
+                        println!("KV server: DEL {}", key);
+                        command_log
+                            .write()
+                            .unwrap()
+                            .append(Command::Delete { key: key.clone() });
+                        kv.write().unwrap().del(&key);
+                    }
                 }
             }
         });
