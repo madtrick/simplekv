@@ -18,6 +18,34 @@ impl KV {
         KV { map }
     }
 
+    pub fn init_from_logfile(filename: &String) -> KV {
+        let mut map = HashMap::new();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(filename)
+            .unwrap();
+        let lines = BufReader::new(file).lines();
+        let set_regex = Regex::new(r"(\w+)=(\w+)").unwrap();
+        let del_regex = Regex::new(r"DEL (\w+)").unwrap();
+
+        lines.for_each(|line| {
+            if let Ok(line) = line {
+                // This patter of `let x = foo else bar` is called let-else. https://rust-lang.github.io/rfcs/3137-let-else.html
+                if let Some(capture) = set_regex.captures(line.as_str()) {
+                    println!("Key {}, Value {}", &capture[1], &capture[2]);
+                    map.insert(String::from(&capture[1]), String::from(&capture[2]));
+                } else if let Some(capture) = del_regex.captures(line.as_str()) {
+                    println!("Del Key {}", &capture[1]);
+                    map.remove(&capture[1]);
+                };
+            }
+        });
+
+        KV::new(map)
+    }
+
     pub fn set(&mut self, key: String, value: String) {
         self.map.insert(key, value);
     }
@@ -32,41 +60,13 @@ impl KV {
     }
 }
 
-fn init_from_logfile(filename: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(filename)
-        .unwrap();
-    let lines = BufReader::new(file).lines();
-    let set_regex = Regex::new(r"(\w+)=(\w+)").unwrap();
-    let del_regex = Regex::new(r"DEL (\w+)").unwrap();
-
-    lines.for_each(|line| {
-        if let Ok(line) = line {
-            // This patter of `let x = foo else bar` is called let-else. https://rust-lang.github.io/rfcs/3137-let-else.html
-            if let Some(capture) = set_regex.captures(line.as_str()) {
-                println!("Key {}, Value {}", &capture[1], &capture[2]);
-                map.insert(String::from(&capture[1]), String::from(&capture[2]));
-            } else if let Some(capture) = del_regex.captures(line.as_str()) {
-                println!("Del Key {}", &capture[1]);
-                map.remove(&capture[1]);
-            };
-        }
-    });
-
-    map
-}
-
 pub fn start_kv_server(node_id: &str) {
     // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
     let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
-    let map = init_from_logfile(command_log.read().unwrap().filename());
-    let kv = Arc::new(RwLock::new(KV::new(map)));
-    // let kv_ref = &kv;
+    let kv = Arc::new(RwLock::new(KV::init_from_logfile(
+        command_log.read().unwrap().filename(),
+    )));
 
     for stream in listener.incoming() {
         println!("KV server: Accepted connection");
