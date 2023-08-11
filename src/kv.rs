@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
-use crate::command_log::{self, CommandLog};
+use crate::command_log::CommandLog;
 use crate::Command;
 
 pub(crate) struct KV {
@@ -63,8 +63,8 @@ fn init_from_logfile(filename: &str) -> HashMap<String, String> {
 pub fn start_kv_server(node_id: &str) {
     // TODO read port from config
     let listener = TcpListener::bind("localhost:1337").unwrap();
-    let command_log = Arc::new(RwLock::new(CommandLog::new(&format!("log.{node_id}"))));
-    let map = init_from_logfile(&format!("log.{node_id}"));
+    let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
+    let map = init_from_logfile(command_log.read().unwrap().filename());
     let kv = Arc::new(RwLock::new(KV::new(map)));
     // let kv_ref = &kv;
 
