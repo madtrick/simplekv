@@ -6,10 +6,15 @@ use std::{
     net::TcpStream,
 };
 
-pub(crate) fn start_repl() {
+pub struct StartReplOptions {
+    pub kv_port: String,
+}
+
+pub(crate) fn start_repl(options: StartReplOptions) {
     // TODO: the connection might be refused if the server thread was scheduled later than the repl
     // thread
-    let stream = RefCell::new(TcpStream::connect("localhost:1337").unwrap());
+    let kv_port = options.kv_port;
+    let stream = RefCell::new(TcpStream::connect(format!("localhost:{kv_port}")).unwrap());
     let stream_ref = &stream;
     let mut reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
 

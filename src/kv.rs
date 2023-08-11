@@ -60,9 +60,15 @@ impl KV {
     }
 }
 
-pub fn start_kv_server(node_id: &str) {
-    // TODO read port from config
-    let listener = TcpListener::bind("localhost:1337").unwrap();
+pub struct StartKVServerOptions {
+    pub node_id: String,
+    pub port: String,
+}
+
+pub fn start_kv_server(options: StartKVServerOptions) {
+    let port = options.port;
+    let node_id = options.node_id;
+    let listener = TcpListener::bind(format!("localhost:{port}")).unwrap();
     let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
         command_log.read().unwrap().filename(),

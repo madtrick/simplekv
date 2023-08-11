@@ -3,12 +3,12 @@ mod kv;
 mod webserver;
 
 use clap::Parser;
-use kv::start_kv_server;
-use repl::start_repl;
+use kv::{start_kv_server, StartKVServerOptions};
+use repl::{start_repl, StartReplOptions};
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
-use webserver::launch_webserver;
+use webserver::{start_webserver, StartWebserverOptions};
 
 mod repl;
 
@@ -24,17 +24,31 @@ struct Args {
     // Id of the KV node
     #[arg(long)]
     id: String,
+
+    #[arg(long)]
+    port: String,
 }
 
 fn main() {
     let args = Args::parse();
     let node_id = args.id;
+    let port = args.port;
+    // Cloned to avoid ownership issues between the threads which depend on the port value
+    // TODO: what would have been a better way 👆🏻?
+    let kv_port = port.clone();
+    let kv_port_repl = port.clone();
 
-    thread::spawn(move || start_kv_server(&node_id));
+    thread::spawn(move || start_kv_server(StartKVServerOptions { node_id, port }));
     // Give some time for the server to start so that the repl and the webserver can open a
     // connection
     thread::sleep(Duration::new(1, 0));
 
-    thread::spawn(launch_webserver);
-    thread::spawn(start_repl).join().unwrap();
+    thread::spawn(move || start_webserver(StartWebserverOptions { kv_port }));
+    thread::spawn(move || {
+        start_repl(StartReplOptions {
+            kv_port: kv_port_repl,
+        })
+    })
+    .join()
+    .unwrap();
 }

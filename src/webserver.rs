@@ -7,10 +7,15 @@ use std::{
     net::TcpStream,
 };
 
-pub(crate) fn launch_webserver() {
+pub struct StartWebserverOptions {
+    pub kv_port: String,
+}
+
+pub(crate) fn start_webserver(options: StartWebserverOptions) {
     // TODO make the port a config option
     let listener = TcpListener::bind("localhost:3333").unwrap();
-    let kv_stream = RefCell::new(TcpStream::connect("localhost:1337").unwrap());
+    let kv_port = options.kv_port;
+    let kv_stream = RefCell::new(TcpStream::connect(format!("localhost:{kv_port}")).unwrap());
     let kv_stream_ref = &kv_stream;
     let mut reader = BufReader::new(kv_stream_ref.borrow_mut().try_clone().unwrap());
 
