@@ -7,6 +7,7 @@ use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
 use crate::command_log::CommandLog;
+use crate::ping::{start_ping, StartPingOptions};
 use crate::Command;
 
 pub(crate) struct KV {
@@ -63,6 +64,8 @@ impl KV {
 pub struct StartKVServerOptions {
     pub node_id: String,
     pub port: String,
+    pub peers: Vec<String>,
+    pub is_leader: bool,
 }
 
 pub fn start_kv_server(options: StartKVServerOptions) {
@@ -74,9 +77,18 @@ pub fn start_kv_server(options: StartKVServerOptions) {
         command_log.read().unwrap().filename(),
     )));
 
+    if options.is_leader {
+        start_ping(StartPingOptions {
+            peers: options.peers,
+        });
+    }
+
     for stream in listener.incoming() {
-        println!("KV server: Accepted connection");
         let stream = stream.unwrap();
+        println!(
+            "KV server: Accepted connection {}",
+            stream.peer_addr().unwrap()
+        );
         /*
          * Clone the Arc to increase the refererence count and also
          * let the thread closure move this clone
@@ -95,6 +107,12 @@ pub fn start_kv_server(options: StartKVServerOptions) {
             for line in buf_reader.lines() {
                 let request_line_string = line.unwrap();
                 println!("MESSAGE {}", request_line_string);
+                if request_line_string == "PING" {
+                    println!("PING request");
+                    stream_ref.borrow_mut().write_all(b"PONG\n").unwrap();
+                    continue;
+                }
+
                 let command = serde_json::from_str::<Command>(&request_line_string).unwrap();
                 println!("{:?}", command);
 
