@@ -1,14 +1,15 @@
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
 use crate::command_log::CommandLog;
 use crate::ping::{start_ping, StartPingOptions};
-use crate::Command;
 
 pub(crate) struct KV {
     map: HashMap<String, String>,
@@ -19,6 +20,7 @@ impl KV {
         KV { map }
     }
 
+    // TODO: this method should be moved to the `CommandLog`
     pub fn init_from_logfile(filename: &String) -> KV {
         let mut map = HashMap::new();
         let file = OpenOptions::new()
@@ -28,8 +30,8 @@ impl KV {
             .open(filename)
             .unwrap();
         let lines = BufReader::new(file).lines();
-        let set_regex = Regex::new(r"(\w+)=(\w+)").unwrap();
-        let del_regex = Regex::new(r"DEL (\w+)").unwrap();
+        let set_regex = Regex::new(r"\d+#(\w+)=(\w+)").unwrap();
+        let del_regex = Regex::new(r"\d+#DEL (\w+)").unwrap();
 
         lines.for_each(|line| {
             if let Ok(line) = line {
@@ -61,6 +63,31 @@ impl KV {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Command {
+    Set { key: String, value: String },
+    Delete { key: String },
+    Get { key: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReplicationCommand {
+    pub command: Command,
+    pub sequence: usize,
+}
+
+struct ReplicationPeer {
+    pub stream: TcpStream,
+}
+
+impl ReplicationPeer {
+    fn new(peer: &String) -> Self {
+        ReplicationPeer {
+            stream: TcpStream::connect(peer).unwrap(),
+        }
+    }
+}
+
 pub struct StartKVServerOptions {
     pub node_id: String,
     pub port: String,
@@ -76,13 +103,22 @@ pub fn start_kv_server(options: StartKVServerOptions) {
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
         command_log.read().unwrap().filename(),
     )));
+    let mut replication_peers = Vec::new();
 
     if options.is_leader {
-        start_ping(StartPingOptions {
-            peers: options.peers,
-        });
+        for peer in options.peers {
+            replication_peers.push(ReplicationPeer::new(&peer));
+        }
     }
 
+    let replication_peers = Arc::new(RwLock::new(replication_peers));
+
+    // if options.is_leader {
+    //     start_ping(StartPingOptions {
+    //         peers: options.peers,
+    //     });
+    // }
+    //
     for stream in listener.incoming() {
         let stream = stream.unwrap();
         println!(
@@ -119,11 +155,20 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                 match command {
                     Command::Set { key, value } => {
                         println!("KV server: SET {} = {}", key, value);
-                        command_log.write().unwrap().append(Command::Set {
+                        let sequence = command_log.write().unwrap().append(Command::Set {
                             key: key.clone(),
                             value: value.clone(),
                         });
-                        kv.write().unwrap().set(key, value)
+
+                        println!("Sequence {}", sequence);
+                        kv.write().unwrap().set(key, value);
+                        // stream_ref.borrow_mut().write_all(
+                        //     serde_json::to_string(&ReplicationCommand { command, sequence })
+                        //         .unwrap()
+                        //         .as_bytes(),
+                        // );
+                        let replication_peers = replication_peers.read().unwrap();
+                        for replication_peer in replication_peers {}
                     }
                     Command::Get { key } => {
                         println!("KV server: GET {}", key);

@@ -6,19 +6,11 @@ mod webserver;
 use clap::Parser;
 use kv::{start_kv_server, StartKVServerOptions};
 use repl::{start_repl, StartReplOptions};
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{str::FromStr, thread};
 use webserver::{start_webserver, StartWebserverOptions};
 
 mod repl;
-
-#[derive(Debug, Serialize, Deserialize)]
-enum Command {
-    Set { key: String, value: String },
-    Delete { key: String },
-    Get { key: String },
-}
 
 #[derive(Parser)]
 struct Args {

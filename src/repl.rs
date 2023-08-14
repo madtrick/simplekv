@@ -1,4 +1,4 @@
-use crate::Command;
+use crate::kv::Command;
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
