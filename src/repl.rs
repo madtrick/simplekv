@@ -1,4 +1,4 @@
-use crate::kv::Command;
+use crate::kv::{Command, Message};
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
@@ -26,7 +26,7 @@ pub(crate) fn start_repl(options: StartReplOptions) {
                 (key: String, value: String) => |key: String, value: String| {
                     // I have to finish the string with a \n because the receiving end is expecting
                     // a breakline terminated string
-                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Set { key, value }).unwrap()).as_bytes()).unwrap();
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Message::Command(Command::Set { key, value })).unwrap()).as_bytes()).unwrap();
 
                     Ok(CommandStatus::Done)
                 }
@@ -37,7 +37,7 @@ pub(crate) fn start_repl(options: StartReplOptions) {
             command! {
                 "Get a value",
                 (key: String) => |key| {
-                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Get { key }).unwrap()).as_bytes()).unwrap();
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Message::Command(Command::Get { key })).unwrap()).as_bytes()).unwrap();
 
                     let mut value = String::new();
                     reader.read_line(&mut value).unwrap();
@@ -54,7 +54,7 @@ pub(crate) fn start_repl(options: StartReplOptions) {
             command! {
                 "Delete a value",
                 (key: String) => |key: String| {
-                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Command::Delete { key }).unwrap()).as_bytes()).unwrap();
+                    stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Message::Command(Command::Delete { key })).unwrap()).as_bytes()).unwrap();
 
                     Ok(CommandStatus::Done)
                 }

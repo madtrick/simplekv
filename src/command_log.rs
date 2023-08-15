@@ -1,4 +1,4 @@
-use crate::Command;
+use crate::kv::Command;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 
@@ -40,12 +40,12 @@ impl CommandLog {
         }
     }
 
-    pub fn append(&mut self, command: Command) -> usize {
+    pub fn append(&mut self, command: &Command) -> usize {
         match command {
-            Command::Set { key, value } => {
+            Command::Set { ref key, ref value } => {
                 writeln!(&mut self.file, "{}#{}={}", self.sequence, key, value).unwrap();
             }
-            Command::Delete { key } => {
+            Command::Delete { ref key } => {
                 writeln!(&mut self.file, "{}#DEL {}", self.sequence, key).unwrap();
             }
             _ => panic!("Can't log this command"),

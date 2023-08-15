@@ -63,15 +63,21 @@ impl KV {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Command {
     Set { key: String, value: String },
     Delete { key: String },
     Get { key: String },
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Message {
+    Command(Command),
+    ReplicationCommand(ReplicationCommand),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-struct ReplicationCommand {
+pub struct ReplicationCommand {
     pub command: Command,
     pub sequence: usize,
 }
@@ -85,6 +91,23 @@ impl ReplicationPeer {
         ReplicationPeer {
             stream: TcpStream::connect(peer).unwrap(),
         }
+    }
+
+    fn replicate(&mut self, command: Command, sequence: usize) {
+        println!("Replicate ");
+        self.stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&Message::ReplicationCommand(ReplicationCommand {
+                        command,
+                        sequence,
+                    }))
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
     }
 }
 
@@ -131,6 +154,7 @@ pub fn start_kv_server(options: StartKVServerOptions) {
          */
         let kv = kv.clone();
         let command_log = command_log.clone();
+        let replication_peers = replication_peers.clone();
 
         thread::spawn(move || {
             let stream = RefCell::new(stream);
@@ -149,45 +173,55 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                     continue;
                 }
 
-                let command = serde_json::from_str::<Command>(&request_line_string).unwrap();
-                println!("{:?}", command);
+                let message = serde_json::from_str::<Message>(&request_line_string).unwrap();
+                println!("{:?}", message);
 
-                match command {
-                    Command::Set { key, value } => {
-                        println!("KV server: SET {} = {}", key, value);
-                        let sequence = command_log.write().unwrap().append(Command::Set {
-                            key: key.clone(),
-                            value: value.clone(),
-                        });
+                match message {
+                    Message::Command(command) => {
+                        match command {
+                            Command::Set { ref key, ref value } => {
+                                println!("KV server: SET {} = {}", key, value);
+                                // let sequence = command_log.write().unwrap().append(Command::Set {
+                                //     key: key.clone(),
+                                //     value: value.clone(),
+                                // });
 
-                        println!("Sequence {}", sequence);
-                        kv.write().unwrap().set(key, value);
-                        // stream_ref.borrow_mut().write_all(
-                        //     serde_json::to_string(&ReplicationCommand { command, sequence })
-                        //         .unwrap()
-                        //         .as_bytes(),
-                        // );
-                        let replication_peers = replication_peers.read().unwrap();
-                        for replication_peer in replication_peers {}
-                    }
-                    Command::Get { key } => {
-                        println!("KV server: GET {}", key);
+                                let sequence = command_log.write().unwrap().append(&command);
 
-                        match kv.read().unwrap().get(&key) {
-                            Some(value) => stream_ref
-                                .borrow_mut()
-                                .write_all(format!("{value}\n").as_bytes())
-                                .unwrap(),
-                            None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                                println!("Sequence {}", sequence);
+                                kv.write().unwrap().set(key.clone(), value.clone());
+                                // stream_ref.borrow_mut().write_all(
+                                //     serde_json::to_string(&ReplicationCommand { command, sequence })
+                                //         .unwrap()
+                                //         .as_bytes(),
+                                // );
+                                let mut replication_peers = replication_peers.write().unwrap();
+                                for replication_peer in replication_peers.iter_mut() {
+                                    replication_peer.replicate(command.clone(), sequence)
+                                }
+                            }
+                            Command::Get { key } => {
+                                println!("KV server: GET {}", key);
+
+                                match kv.read().unwrap().get(&key) {
+                                    Some(value) => stream_ref
+                                        .borrow_mut()
+                                        .write_all(format!("{value}\n").as_bytes())
+                                        .unwrap(),
+                                    None => {
+                                        stream_ref.borrow_mut().write_all(b"__none__\n").unwrap()
+                                    }
+                                }
+                            }
+                            Command::Delete { ref key } => {
+                                println!("KV server: DEL {}", key);
+                                command_log.write().unwrap().append(&command);
+                                kv.write().unwrap().del(key);
+                            }
                         }
                     }
-                    Command::Delete { key } => {
-                        println!("KV server: DEL {}", key);
-                        command_log
-                            .write()
-                            .unwrap()
-                            .append(Command::Delete { key: key.clone() });
-                        kv.write().unwrap().del(&key);
+                    Message::ReplicationCommand(replication) => {
+                        println!("Replication {:?}", replication)
                     }
                 }
             }
