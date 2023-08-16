@@ -55,6 +55,20 @@ impl CommandLog {
         self.sequence
     }
 
+    pub fn replicated_append(&mut self, command: &Command, sequence: usize) -> usize {
+        match command {
+            Command::Set { ref key, ref value } => {
+                writeln!(&mut self.file, "{}#{}={}", sequence, key, value).unwrap();
+            }
+            Command::Delete { ref key } => {
+                writeln!(&mut self.file, "{}#DEL {}", sequence, key).unwrap();
+            }
+            _ => panic!("Can't log this command"),
+        }
+
+        sequence
+    }
+
     pub fn filename(&self) -> &String {
         &self.filename
     }

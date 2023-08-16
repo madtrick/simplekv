@@ -221,7 +221,57 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                         }
                     }
                     Message::ReplicationCommand(replication) => {
-                        println!("Replication {:?}", replication)
+                        println!("Replication {:?}", replication);
+                        let command = replication.command;
+                        let sequence = replication.sequence;
+
+                        match command {
+                            Command::Set { ref key, ref value } => {
+                                println!("KV server: SET {} = {}", key, value);
+                                // let sequence = command_log.write().unwrap().append(Command::Set {
+                                //     key: key.clone(),
+                                //     value: value.clone(),
+                                // });
+
+                                let sequence = command_log
+                                    .write()
+                                    .unwrap()
+                                    .replicated_append(&command, sequence);
+
+                                println!("Sequence {}", sequence);
+                                kv.write().unwrap().set(key.clone(), value.clone());
+                                // stream_ref.borrow_mut().write_all(
+                                //     serde_json::to_string(&ReplicationCommand { command, sequence })
+                                //         .unwrap()
+                                //         .as_bytes(),
+                                // );
+                                let mut replication_peers = replication_peers.write().unwrap();
+                                for replication_peer in replication_peers.iter_mut() {
+                                    replication_peer.replicate(command.clone(), sequence)
+                                }
+                            }
+                            Command::Get { key } => {
+                                println!("KV server: GET {}", key);
+
+                                match kv.read().unwrap().get(&key) {
+                                    Some(value) => stream_ref
+                                        .borrow_mut()
+                                        .write_all(format!("{value}\n").as_bytes())
+                                        .unwrap(),
+                                    None => {
+                                        stream_ref.borrow_mut().write_all(b"__none__\n").unwrap()
+                                    }
+                                }
+                            }
+                            Command::Delete { ref key } => {
+                                println!("KV server: DEL {}", key);
+                                command_log
+                                    .write()
+                                    .unwrap()
+                                    .replicated_append(&command, sequence);
+                                kv.write().unwrap().del(key);
+                            }
+                        }
                     }
                 }
             }
