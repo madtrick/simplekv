@@ -9,7 +9,7 @@ use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
 use crate::command_log::CommandLog;
-use crate::ping::{start_ping, StartPingOptions};
+// use crate::ping::{start_ping, StartPingOptions};
 
 pub(crate) struct KV {
     map: HashMap<String, String>,
@@ -71,9 +71,15 @@ pub enum Command {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct Connect {
+    pub from: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Command(Command),
     ReplicationCommand(ReplicationCommand),
+    Connect(Connect),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,12 +89,14 @@ pub struct ReplicationCommand {
 }
 
 struct ReplicationPeer {
+    pub peer: String,
     pub stream: TcpStream,
 }
 
 impl ReplicationPeer {
     fn new(peer: &String) -> Self {
         ReplicationPeer {
+            peer: peer.clone(),
             stream: TcpStream::connect(peer).unwrap(),
         }
     }
@@ -114,8 +122,7 @@ impl ReplicationPeer {
 pub struct StartKVServerOptions {
     pub node_id: String,
     pub port: String,
-    pub peers: Vec<String>,
-    pub is_leader: bool,
+    pub leader: Option<String>,
 }
 
 pub fn start_kv_server(options: StartKVServerOptions) {
@@ -126,15 +133,29 @@ pub fn start_kv_server(options: StartKVServerOptions) {
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
         command_log.read().unwrap().filename(),
     )));
-    let mut replication_peers = Vec::new();
-
-    if options.is_leader {
-        for peer in options.peers {
-            replication_peers.push(ReplicationPeer::new(&peer));
-        }
-    }
-
+    let replication_peers: Vec<ReplicationPeer> = Vec::new();
     let replication_peers = Arc::new(RwLock::new(replication_peers));
+
+    if let Some(leader) = options.leader {
+        let mut stream = TcpStream::connect(&leader).unwrap();
+
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&Message::Connect(Connect {
+                        from: format!("localhost:{port}")
+                    }))
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut value = String::new();
+        reader.read_line(&mut value).unwrap();
+    }
 
     // if options.is_leader {
     //     start_ping(StartPingOptions {
@@ -197,6 +218,7 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                                 // );
                                 let mut replication_peers = replication_peers.write().unwrap();
                                 for replication_peer in replication_peers.iter_mut() {
+                                    println!("Replicate to {}", replication_peer.peer);
                                     replication_peer.replicate(command.clone(), sequence)
                                 }
                             }
@@ -220,6 +242,18 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                             }
                         }
                     }
+                    Message::Connect(data) => match data {
+                        // TODO: can I do the matching on the line above instead of using another
+                        // `match` expression
+                        Connect { from } => {
+                            println!("Connect from {}", from);
+                            replication_peers
+                                .write()
+                                .unwrap()
+                                .push(ReplicationPeer::new(&from))
+                        }
+                        _ => panic!("Unexpected connect payload"),
+                    },
                     Message::ReplicationCommand(replication) => {
                         println!("Replication {:?}", replication);
                         let command = replication.command;

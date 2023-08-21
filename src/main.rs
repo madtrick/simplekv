@@ -22,7 +22,7 @@ struct Args {
     port: String,
 
     #[arg(long)]
-    leader: bool,
+    follower: bool,
 }
 
 fn main() {
@@ -34,12 +34,24 @@ fn main() {
     let kv_port = port.clone();
     let kv_port_repl = port.clone();
 
+    /*
+     * - If the node is not the leader then the kv server will take the ip and port of the leader
+     * - The KV will register with the leader as a replica
+     * - The leader will negotiate what information the replica is missing and send it
+     * - It can start sending the full log
+     * - The replica can request missing commands based on the sequence number
+     */
+
+    let leader = match args.follower {
+        true => Some("localhost:1338".to_string()),
+        false => None,
+    };
+
     thread::spawn(move || {
         start_kv_server(StartKVServerOptions {
             node_id,
             port,
-            peers: vec![String::from_str("localhost:1339").unwrap()],
-            is_leader: args.leader,
+            leader,
         })
     });
     // Give some time for the server to start so that the repl and the webserver can open a
