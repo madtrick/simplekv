@@ -12,7 +12,7 @@ use crate::command_log::CommandLog;
 // use crate::ping::{start_ping, StartPingOptions};
 
 pub(crate) struct KV {
-    map: HashMap<String, String>,
+    pub map: HashMap<String, String>,
 }
 
 impl KV {
@@ -75,11 +75,17 @@ pub struct Connect {
     pub from: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConnectOk {
+    pub map: HashMap<String, String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Command(Command),
     ReplicationCommand(ReplicationCommand),
     Connect(Connect),
+    ConnectOk(ConnectOk),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,10 +100,10 @@ struct ReplicationPeer {
 }
 
 impl ReplicationPeer {
-    fn new(peer: &String) -> Self {
+    fn new(peer: &String, stream: TcpStream) -> Self {
         ReplicationPeer {
             peer: peer.clone(),
-            stream: TcpStream::connect(peer).unwrap(),
+            stream,
         }
     }
 
@@ -125,6 +131,168 @@ pub struct StartKVServerOptions {
     pub leader: Option<String>,
 }
 
+fn handle_stream(
+    stream: TcpStream,
+    kv: Arc<RwLock<KV>>,
+    command_log: Arc<RwLock<CommandLog>>,
+    replication_peers: Arc<RwLock<Vec<ReplicationPeer>>>,
+) {
+    let stream = RefCell::new(stream);
+    let stream_ref = &stream;
+    // TODO understand why "stream_ref.borrow_mut" fails but "stream_ref.borrow_mut.try_clone"
+    // works
+    let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
+
+    // TODO there should be only one line. No need to iterate.
+    for line in buf_reader.lines() {
+        let request_line_string = line.unwrap();
+        println!("MESSAGE {}", request_line_string);
+        if request_line_string == "PING" {
+            println!("PING request");
+            stream_ref.borrow_mut().write_all(b"PONG\n").unwrap();
+            continue;
+        }
+
+        let message = serde_json::from_str::<Message>(&request_line_string).unwrap();
+        println!("{:?}", message);
+
+        match message {
+            Message::Command(command) => {
+                match command {
+                    // TODO: this commands can't be handled by a replica because the
+                    // repl is sending the commands to the wrong host (the leader) and because
+                    // the replica is not listening to any other connection than the one opened
+                    // with the leader
+                    Command::Set { ref key, ref value } => {
+                        println!("KV server: SET {} = {}", key, value);
+                        // let sequence = command_log.write().unwrap().append(Command::Set {
+                        //     key: key.clone(),
+                        //     value: value.clone(),
+                        // });
+
+                        let sequence = command_log.write().unwrap().append(&command);
+
+                        println!("Sequence {}", sequence);
+                        kv.write().unwrap().set(key.clone(), value.clone());
+                        // stream_ref.borrow_mut().write_all(
+                        //     serde_json::to_string(&ReplicationCommand { command, sequence })
+                        //         .unwrap()
+                        //         .as_bytes(),
+                        // );
+                        let mut replication_peers = replication_peers.write().unwrap();
+                        for replication_peer in replication_peers.iter_mut() {
+                            println!("Replicate to {}", replication_peer.peer);
+                            replication_peer.replicate(command.clone(), sequence)
+                        }
+                    }
+                    Command::Get { key } => {
+                        println!("KV server: GET {}", key);
+
+                        match kv.read().unwrap().get(&key) {
+                            Some(value) => stream_ref
+                                .borrow_mut()
+                                .write_all(format!("{value}\n").as_bytes())
+                                .unwrap(),
+                            None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                        }
+                    }
+                    Command::Delete { ref key } => {
+                        println!("KV server: DEL {}", key);
+                        command_log.write().unwrap().append(&command);
+                        kv.write().unwrap().del(key);
+                    }
+                }
+            }
+            Message::Connect(data) => match data {
+                // TODO: can I do the matching on the line above instead of using another
+                // `match` expression
+                Connect { from } => {
+                    println!("Connect from {}", from);
+                    replication_peers
+                        .write()
+                        .unwrap()
+                        .push(ReplicationPeer::new(
+                            &from,
+                            stream_ref.borrow().try_clone().unwrap(),
+                        ));
+
+                    stream_ref
+                        .borrow_mut()
+                        .write_all(
+                            format!(
+                                "{}\n",
+                                serde_json::to_string(&Message::ConnectOk(ConnectOk {
+                                    // TODO: do not read directly the map from the KV
+                                    map: kv.read().unwrap().map.clone()
+                                }))
+                                .unwrap()
+                            )
+                            .as_bytes(),
+                        )
+                        .unwrap()
+                }
+                _ => panic!("Unexpected connect payload"),
+            },
+            Message::ConnectOk(ConnectOk { map }) => {
+                for (key, value) in map {
+                    kv.write().unwrap().set(key, value)
+                }
+            }
+            Message::ReplicationCommand(replication) => {
+                println!("Replication {:?}", replication);
+                let command = replication.command;
+                let sequence = replication.sequence;
+
+                match command {
+                    Command::Set { ref key, ref value } => {
+                        println!("KV server: SET {} = {}", key, value);
+                        // let sequence = command_log.write().unwrap().append(Command::Set {
+                        //     key: key.clone(),
+                        //     value: value.clone(),
+                        // });
+
+                        let sequence = command_log
+                            .write()
+                            .unwrap()
+                            .replicated_append(&command, sequence);
+
+                        println!("Sequence {}", sequence);
+                        kv.write().unwrap().set(key.clone(), value.clone());
+                        // stream_ref.borrow_mut().write_all(
+                        //     serde_json::to_string(&ReplicationCommand { command, sequence })
+                        //         .unwrap()
+                        //         .as_bytes(),
+                        // );
+                        let mut replication_peers = replication_peers.write().unwrap();
+                        for replication_peer in replication_peers.iter_mut() {
+                            replication_peer.replicate(command.clone(), sequence)
+                        }
+                    }
+                    Command::Get { key } => {
+                        println!("KV server: GET {}", key);
+
+                        match kv.read().unwrap().get(&key) {
+                            Some(value) => stream_ref
+                                .borrow_mut()
+                                .write_all(format!("{value}\n").as_bytes())
+                                .unwrap(),
+                            None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
+                        }
+                    }
+                    Command::Delete { ref key } => {
+                        println!("KV server: DEL {}", key);
+                        command_log
+                            .write()
+                            .unwrap()
+                            .replicated_append(&command, sequence);
+                        kv.write().unwrap().del(key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn start_kv_server(options: StartKVServerOptions) {
     let port = options.port;
     let node_id = options.node_id;
@@ -144,7 +312,7 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                 format!(
                     "{}\n",
                     serde_json::to_string(&Message::Connect(Connect {
-                        from: format!("localhost:{port}")
+                        from: format!("localhost:{port}") // TODO: include current sequence number in the replica
                     }))
                     .unwrap()
                 )
@@ -152,164 +320,31 @@ pub fn start_kv_server(options: StartKVServerOptions) {
             )
             .unwrap();
 
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut value = String::new();
-        reader.read_line(&mut value).unwrap();
-    }
+        handle_stream(stream, kv, command_log, replication_peers)
+    } else {
+        for stream in listener.incoming() {
+            let stream = stream.unwrap();
+            println!(
+                "KV server: Accepted connection {}",
+                stream.peer_addr().unwrap()
+            );
+            /*
+             * Clone the Arc to increase the refererence count and also
+             * let the thread closure move this clone
+             */
+            let kv = kv.clone();
+            let command_log = command_log.clone();
+            let replication_peers = replication_peers.clone();
 
-    // if options.is_leader {
-    //     start_ping(StartPingOptions {
-    //         peers: options.peers,
-    //     });
-    // }
-    //
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-        println!(
-            "KV server: Accepted connection {}",
-            stream.peer_addr().unwrap()
-        );
-        /*
-         * Clone the Arc to increase the refererence count and also
-         * let the thread closure move this clone
-         */
-        let kv = kv.clone();
-        let command_log = command_log.clone();
-        let replication_peers = replication_peers.clone();
+            thread::spawn(move || handle_stream(stream, kv, command_log, replication_peers));
+        }
 
-        thread::spawn(move || {
-            let stream = RefCell::new(stream);
-            let stream_ref = &stream;
-            // TODO understand why "stream_ref.borrow_mut" fails but "stream_ref.borrow_mut.try_clone"
-            // works
-            let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
-
-            // TODO there should be only one line. No need to iterate.
-            for line in buf_reader.lines() {
-                let request_line_string = line.unwrap();
-                println!("MESSAGE {}", request_line_string);
-                if request_line_string == "PING" {
-                    println!("PING request");
-                    stream_ref.borrow_mut().write_all(b"PONG\n").unwrap();
-                    continue;
-                }
-
-                let message = serde_json::from_str::<Message>(&request_line_string).unwrap();
-                println!("{:?}", message);
-
-                match message {
-                    Message::Command(command) => {
-                        match command {
-                            Command::Set { ref key, ref value } => {
-                                println!("KV server: SET {} = {}", key, value);
-                                // let sequence = command_log.write().unwrap().append(Command::Set {
-                                //     key: key.clone(),
-                                //     value: value.clone(),
-                                // });
-
-                                let sequence = command_log.write().unwrap().append(&command);
-
-                                println!("Sequence {}", sequence);
-                                kv.write().unwrap().set(key.clone(), value.clone());
-                                // stream_ref.borrow_mut().write_all(
-                                //     serde_json::to_string(&ReplicationCommand { command, sequence })
-                                //         .unwrap()
-                                //         .as_bytes(),
-                                // );
-                                let mut replication_peers = replication_peers.write().unwrap();
-                                for replication_peer in replication_peers.iter_mut() {
-                                    println!("Replicate to {}", replication_peer.peer);
-                                    replication_peer.replicate(command.clone(), sequence)
-                                }
-                            }
-                            Command::Get { key } => {
-                                println!("KV server: GET {}", key);
-
-                                match kv.read().unwrap().get(&key) {
-                                    Some(value) => stream_ref
-                                        .borrow_mut()
-                                        .write_all(format!("{value}\n").as_bytes())
-                                        .unwrap(),
-                                    None => {
-                                        stream_ref.borrow_mut().write_all(b"__none__\n").unwrap()
-                                    }
-                                }
-                            }
-                            Command::Delete { ref key } => {
-                                println!("KV server: DEL {}", key);
-                                command_log.write().unwrap().append(&command);
-                                kv.write().unwrap().del(key);
-                            }
-                        }
-                    }
-                    Message::Connect(data) => match data {
-                        // TODO: can I do the matching on the line above instead of using another
-                        // `match` expression
-                        Connect { from } => {
-                            println!("Connect from {}", from);
-                            replication_peers
-                                .write()
-                                .unwrap()
-                                .push(ReplicationPeer::new(&from))
-                        }
-                        _ => panic!("Unexpected connect payload"),
-                    },
-                    Message::ReplicationCommand(replication) => {
-                        println!("Replication {:?}", replication);
-                        let command = replication.command;
-                        let sequence = replication.sequence;
-
-                        match command {
-                            Command::Set { ref key, ref value } => {
-                                println!("KV server: SET {} = {}", key, value);
-                                // let sequence = command_log.write().unwrap().append(Command::Set {
-                                //     key: key.clone(),
-                                //     value: value.clone(),
-                                // });
-
-                                let sequence = command_log
-                                    .write()
-                                    .unwrap()
-                                    .replicated_append(&command, sequence);
-
-                                println!("Sequence {}", sequence);
-                                kv.write().unwrap().set(key.clone(), value.clone());
-                                // stream_ref.borrow_mut().write_all(
-                                //     serde_json::to_string(&ReplicationCommand { command, sequence })
-                                //         .unwrap()
-                                //         .as_bytes(),
-                                // );
-                                let mut replication_peers = replication_peers.write().unwrap();
-                                for replication_peer in replication_peers.iter_mut() {
-                                    replication_peer.replicate(command.clone(), sequence)
-                                }
-                            }
-                            Command::Get { key } => {
-                                println!("KV server: GET {}", key);
-
-                                match kv.read().unwrap().get(&key) {
-                                    Some(value) => stream_ref
-                                        .borrow_mut()
-                                        .write_all(format!("{value}\n").as_bytes())
-                                        .unwrap(),
-                                    None => {
-                                        stream_ref.borrow_mut().write_all(b"__none__\n").unwrap()
-                                    }
-                                }
-                            }
-                            Command::Delete { ref key } => {
-                                println!("KV server: DEL {}", key);
-                                command_log
-                                    .write()
-                                    .unwrap()
-                                    .replicated_append(&command, sequence);
-                                kv.write().unwrap().del(key);
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        // if options.is_leader {
+        //     start_ping(StartPingOptions {
+        //         peers: options.peers,
+        //     });
+        // }
+        //
 
         // handle.join();
     }
