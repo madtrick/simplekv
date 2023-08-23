@@ -312,6 +312,8 @@ pub fn start_kv_server(options: StartKVServerOptions) {
                 format!(
                     "{}\n",
                     serde_json::to_string(&Message::Connect(Connect {
+                        // TODO: do we need to send the address of the peer. The KV could get it
+                        // from the connection
                         from: format!("localhost:{port}") // TODO: include current sequence number in the replica
                     }))
                     .unwrap()

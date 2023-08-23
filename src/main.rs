@@ -47,23 +47,28 @@ fn main() {
         false => None,
     };
 
-    thread::spawn(move || {
+    let handler = thread::spawn(move || {
         start_kv_server(StartKVServerOptions {
             node_id,
             port,
             leader,
         })
     });
-    // Give some time for the server to start so that the repl and the webserver can open a
-    // connection
-    thread::sleep(Duration::new(1, 0));
 
-    thread::spawn(move || start_webserver(StartWebserverOptions { kv_port }));
-    thread::spawn(move || {
-        start_repl(StartReplOptions {
-            kv_port: kv_port_repl,
+    if !args.follower {
+        // Give some time for the server to start so that the repl and the webserver can open a
+        // connection
+        thread::sleep(Duration::new(1, 0));
+
+        thread::spawn(move || start_webserver(StartWebserverOptions { kv_port }));
+        thread::spawn(move || {
+            start_repl(StartReplOptions {
+                kv_port: kv_port_repl,
+            })
         })
-    })
-    .join()
-    .unwrap();
+        .join()
+        .unwrap();
+    }
+
+    handler.join().unwrap();
 }
