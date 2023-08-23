@@ -205,8 +205,20 @@ fn handle_stream(
                     }
                     Command::Delete { ref key } => {
                         println!("KV server: DEL {}", key);
-                        command_log.write().unwrap().append(&command);
+                        let sequence = command_log.write().unwrap().append(&command);
                         kv.write().unwrap().del(key);
+
+                        let mut replication_peers = replication_peers.write().unwrap();
+                        for (index, replication_peer) in replication_peers.iter_mut().enumerate() {
+                            println!("Replicate to {}", replication_peer.peer);
+                            match replication_peer.replicate(command.clone(), sequence) {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    println!("{}", e);
+                                    dead_peers.push(index);
+                                }
+                            }
+                        }
                     }
                 }
             }
