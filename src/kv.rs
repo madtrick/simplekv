@@ -2,7 +2,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Result as IOResult, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -107,21 +107,21 @@ impl ReplicationPeer {
         }
     }
 
-    fn replicate(&mut self, command: Command, sequence: usize) {
+    fn replicate(&mut self, command: Command, sequence: usize) -> IOResult<()> {
         println!("Replicate ");
-        self.stream
-            .write_all(
-                format!(
-                    "{}\n",
-                    serde_json::to_string(&Message::ReplicationCommand(ReplicationCommand {
-                        command,
-                        sequence,
-                    }))
-                    .unwrap()
-                )
-                .as_bytes(),
+        let response = self.stream.write_all(
+            format!(
+                "{}\n",
+                serde_json::to_string(&Message::ReplicationCommand(ReplicationCommand {
+                    command,
+                    sequence,
+                }))
+                .unwrap()
             )
-            .unwrap();
+            .as_bytes(),
+        );
+
+        response
     }
 }
 
@@ -143,7 +143,6 @@ fn handle_stream(
     // works
     let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
 
-    // TODO there should be only one line. No need to iterate.
     for line in buf_reader.lines() {
         let request_line_string = line.unwrap();
         println!("MESSAGE {}", request_line_string);
@@ -182,7 +181,13 @@ fn handle_stream(
                         let mut replication_peers = replication_peers.write().unwrap();
                         for replication_peer in replication_peers.iter_mut() {
                             println!("Replicate to {}", replication_peer.peer);
-                            replication_peer.replicate(command.clone(), sequence)
+                            match replication_peer.replicate(command.clone(), sequence) {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    println!("{}", e);
+                                    return;
+                                }
+                            }
                         }
                     }
                     Command::Get { key } => {
@@ -258,26 +263,9 @@ fn handle_stream(
 
                         println!("Sequence {}", sequence);
                         kv.write().unwrap().set(key.clone(), value.clone());
-                        // stream_ref.borrow_mut().write_all(
-                        //     serde_json::to_string(&ReplicationCommand { command, sequence })
-                        //         .unwrap()
-                        //         .as_bytes(),
-                        // );
-                        let mut replication_peers = replication_peers.write().unwrap();
-                        for replication_peer in replication_peers.iter_mut() {
-                            replication_peer.replicate(command.clone(), sequence)
-                        }
                     }
-                    Command::Get { key } => {
-                        println!("KV server: GET {}", key);
-
-                        match kv.read().unwrap().get(&key) {
-                            Some(value) => stream_ref
-                                .borrow_mut()
-                                .write_all(format!("{value}\n").as_bytes())
-                                .unwrap(),
-                            None => stream_ref.borrow_mut().write_all(b"__none__\n").unwrap(),
-                        }
+                    Command::Get { key: _ } => {
+                        panic!("GET commands can't be replicated")
                     }
                     Command::Delete { ref key } => {
                         println!("KV server: DEL {}", key);
@@ -338,7 +326,15 @@ pub fn start_kv_server(options: StartKVServerOptions) {
             let command_log = command_log.clone();
             let replication_peers = replication_peers.clone();
 
-            thread::spawn(move || handle_stream(stream, kv, command_log, replication_peers));
+            thread::spawn(move || {
+                handle_stream(
+                    stream.try_clone().unwrap(),
+                    kv,
+                    command_log,
+                    replication_peers,
+                );
+                println!("Thread exiting {}", stream.peer_addr().unwrap());
+            });
         }
 
         // if options.is_leader {
