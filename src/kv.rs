@@ -142,6 +142,7 @@ fn handle_stream(
     // TODO understand why "stream_ref.borrow_mut" fails but "stream_ref.borrow_mut.try_clone"
     // works
     let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
+    let mut replication_peer: Option<usize> = None;
 
     for line in buf_reader.lines() {
         let request_line_string = line.unwrap();
@@ -153,6 +154,7 @@ fn handle_stream(
         }
 
         let message = serde_json::from_str::<Message>(&request_line_string).unwrap();
+        let mut dead_peers: Vec<usize> = Vec::new();
         println!("{:?}", message);
 
         match message {
@@ -179,13 +181,13 @@ fn handle_stream(
                         //         .as_bytes(),
                         // );
                         let mut replication_peers = replication_peers.write().unwrap();
-                        for replication_peer in replication_peers.iter_mut() {
+                        for (index, replication_peer) in replication_peers.iter_mut().enumerate() {
                             println!("Replicate to {}", replication_peer.peer);
                             match replication_peer.replicate(command.clone(), sequence) {
                                 Ok(_) => (),
                                 Err(e) => {
                                     println!("{}", e);
-                                    return;
+                                    dead_peers.push(index);
                                 }
                             }
                         }
@@ -220,6 +222,8 @@ fn handle_stream(
                             &from,
                             stream_ref.borrow().try_clone().unwrap(),
                         ));
+
+                    replication_peer = Some(replication_peers.read().unwrap().len() - 1);
 
                     stream_ref
                         .borrow_mut()
@@ -278,6 +282,20 @@ fn handle_stream(
                 }
             }
         }
+
+        // This is needed when the the stream opened for the REPL or webserver
+        // handle an error after trying to write to a closed socket because the peer is gone.
+        for dead_peer in dead_peers {
+            replication_peers.write().unwrap().swap_remove(dead_peer);
+        }
+    }
+
+    // This is needed when the exiting thread is one handle a connection for a replication peer
+    if let Some(replication_peer) = replication_peer {
+        replication_peers
+            .write()
+            .unwrap()
+            .swap_remove(replication_peer);
     }
 }
 
