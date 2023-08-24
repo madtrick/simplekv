@@ -1,4 +1,5 @@
 use crate::kv::Command;
+use crate::utils::Port;
 use regex::Regex;
 use std::net::TcpListener;
 use std::{
@@ -8,7 +9,7 @@ use std::{
 };
 
 pub struct StartWebserverOptions {
-    pub kv_port: String,
+    pub kv_port: Port,
 }
 
 pub(crate) fn start_webserver(options: StartWebserverOptions) {

@@ -9,6 +9,7 @@ use std::thread;
 use std::{collections::HashMap, net::TcpListener};
 
 use crate::command_log::CommandLog;
+use crate::utils::Port;
 // use crate::ping::{start_ping, StartPingOptions};
 
 pub(crate) struct KV {
@@ -127,7 +128,7 @@ impl ReplicationPeer {
 
 pub struct StartKVServerOptions {
     pub node_id: String,
-    pub port: String,
+    pub port: Port,
     pub leader: Option<String>,
 }
 

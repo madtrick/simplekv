@@ -1,4 +1,7 @@
-use crate::kv::{Command, Message};
+use crate::{
+    kv::{Command, Message},
+    utils::Port,
+};
 use easy_repl::{command, CommandStatus, Repl};
 use std::{
     cell::RefCell,
@@ -7,7 +10,7 @@ use std::{
 };
 
 pub struct StartReplOptions {
-    pub kv_port: String,
+    pub kv_port: Port,
 }
 
 pub(crate) fn start_repl(options: StartReplOptions) {
@@ -23,7 +26,7 @@ pub(crate) fn start_repl(options: StartReplOptions) {
             "SET",
             command! {
                 "Set a value",
-                (key: String, value: String) => |key: String, value: String| {
+                (key: String, value: String) =>|key: String, value: String| {
                     // I have to finish the string with a \n because the receiving end is expecting
                     // a breakline terminated string
                     stream_ref.borrow_mut().write_all(format!("{}\n", serde_json::to_string(&Message::Command(Command::Set { key, value })).unwrap()).as_bytes()).unwrap();

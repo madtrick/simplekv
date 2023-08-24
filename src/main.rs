@@ -1,13 +1,14 @@
 mod command_log;
 mod kv;
 mod ping;
+mod utils;
 mod webserver;
 
 use clap::Parser;
 use kv::{start_kv_server, StartKVServerOptions};
 use repl::{start_repl, StartReplOptions};
+use std::thread;
 use std::time::Duration;
-use std::{str::FromStr, thread};
 use webserver::{start_webserver, StartWebserverOptions};
 
 mod repl;
@@ -28,11 +29,7 @@ struct Args {
 fn main() {
     let args = Args::parse();
     let node_id = args.id;
-    let port = args.port;
-    // Cloned to avoid ownership issues between the threads which depend on the port value
-    // TODO: what would have been a better way 👆🏻?
-    let kv_port = port.clone();
-    let kv_port_repl = port.clone();
+    let port = args.port.parse::<u16>().unwrap();
 
     /*
      * - If the node is not the leader then the kv server will take the ip and port of the leader
@@ -60,14 +57,8 @@ fn main() {
         // connection
         thread::sleep(Duration::new(1, 0));
 
-        thread::spawn(move || start_webserver(StartWebserverOptions { kv_port }));
-        thread::spawn(move || {
-            start_repl(StartReplOptions {
-                kv_port: kv_port_repl,
-            })
-        })
-        .join()
-        .unwrap();
+        thread::spawn(move || start_webserver(StartWebserverOptions { kv_port: port }));
+        thread::spawn(move || start_repl(StartReplOptions { kv_port: port }));
     }
 
     handler.join().unwrap();
