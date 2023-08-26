@@ -1,17 +1,45 @@
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-use std::fs::OpenOptions;
+use rustkv::{Command, Connect, ConnectOk, Message, ReplicationCommand};
 use std::io::{BufRead, BufReader, Result as IOResult, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
 use std::thread;
+
+use regex::Regex;
+use std::cell::RefCell;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::{collections::HashMap, net::TcpListener};
 
-use crate::command_log::CommandLog;
-use crate::utils::Port;
-// use crate::ping::{start_ping, StartPingOptions};
+struct ReplicationPeer {
+    pub peer: String,
+    pub stream: TcpStream,
+}
 
+impl ReplicationPeer {
+    fn new(peer: &String, stream: TcpStream) -> Self {
+        ReplicationPeer {
+            peer: peer.clone(),
+            stream,
+        }
+    }
+
+    fn replicate(&mut self, command: Command, sequence: usize) -> IOResult<()> {
+        println!("Replicate ");
+        let response = self.stream.write_all(
+            format!(
+                "{}\n",
+                serde_json::to_string(&Message::ReplicationCommand(ReplicationCommand {
+                    command,
+                    sequence,
+                }))
+                .unwrap()
+            )
+            .as_bytes(),
+        );
+
+        response
+    }
+}
 pub(crate) struct KV {
     pub map: HashMap<String, String>,
 }
@@ -64,72 +92,76 @@ impl KV {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum Command {
-    Set { key: String, value: String },
-    Delete { key: String },
-    Get { key: String },
+pub(crate) struct CommandLog {
+    file: File,       // backing file to store the commands
+    filename: String, // name of the file
+    sequence: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Connect {
-    pub from: String,
+fn upsert_logfile(filename: &String) -> File {
+    File::options()
+        .append(true)
+        .create(true)
+        .open(filename)
+        .unwrap()
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ConnectOk {
-    pub map: HashMap<String, String>,
+fn count_lines(filename: &String) -> usize {
+    // NOTE: I wanted to pass the `File` returned from `upsert_logfile` when I did so the
+    // could would hang. The CommandLog code wouldn't execute pass the call to this
+    // function.
+    // TODO: read only the last line and get its sequence value
+    BufReader::new(File::open(filename).unwrap())
+        .lines()
+        .count()
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Message {
-    Command(Command),
-    ReplicationCommand(ReplicationCommand),
-    Connect(Connect),
-    ConnectOk(ConnectOk),
-}
+impl CommandLog {
+    pub fn new(filename: String) -> CommandLog {
+        let file = upsert_logfile(&filename);
+        let sequence = count_lines(&filename);
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReplicationCommand {
-    pub command: Command,
-    pub sequence: usize,
-}
+        println!("Sequence {}", sequence);
 
-struct ReplicationPeer {
-    pub peer: String,
-    pub stream: TcpStream,
-}
-
-impl ReplicationPeer {
-    fn new(peer: &String, stream: TcpStream) -> Self {
-        ReplicationPeer {
-            peer: peer.clone(),
-            stream,
+        CommandLog {
+            file,
+            filename,
+            sequence,
         }
     }
 
-    fn replicate(&mut self, command: Command, sequence: usize) -> IOResult<()> {
-        println!("Replicate ");
-        let response = self.stream.write_all(
-            format!(
-                "{}\n",
-                serde_json::to_string(&Message::ReplicationCommand(ReplicationCommand {
-                    command,
-                    sequence,
-                }))
-                .unwrap()
-            )
-            .as_bytes(),
-        );
+    pub fn append(&mut self, command: &Command) -> usize {
+        match command {
+            Command::Set { ref key, ref value } => {
+                writeln!(&mut self.file, "{}#{}={}", self.sequence, key, value).unwrap();
+            }
+            Command::Delete { ref key } => {
+                writeln!(&mut self.file, "{}#DEL {}", self.sequence, key).unwrap();
+            }
+            _ => panic!("Can't log this command"),
+        }
 
-        response
+        self.sequence += 1;
+        self.sequence
     }
-}
 
-pub struct StartKVServerOptions {
-    pub node_id: String,
-    pub port: Port,
-    pub leader: Option<String>,
+    pub fn replicated_append(&mut self, command: &Command, sequence: usize) -> usize {
+        match command {
+            Command::Set { ref key, ref value } => {
+                writeln!(&mut self.file, "{}#{}={}", sequence, key, value).unwrap();
+            }
+            Command::Delete { ref key } => {
+                writeln!(&mut self.file, "{}#DEL {}", sequence, key).unwrap();
+            }
+            _ => panic!("Can't log this command"),
+        }
+
+        sequence
+    }
+
+    pub fn filename(&self) -> &String {
+        &self.filename
+    }
 }
 
 fn handle_stream(
@@ -312,9 +344,10 @@ fn handle_stream(
     }
 }
 
-pub fn start_kv_server(options: StartKVServerOptions) {
-    let port = options.port;
-    let node_id = options.node_id;
+pub fn main() {
+    let port = 1338;
+    let node_id = 1;
+    let leader: Option<String> = None;
     let listener = TcpListener::bind(format!("localhost:{port}")).unwrap();
     let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
@@ -323,7 +356,7 @@ pub fn start_kv_server(options: StartKVServerOptions) {
     let replication_peers: Vec<ReplicationPeer> = Vec::new();
     let replication_peers = Arc::new(RwLock::new(replication_peers));
 
-    if let Some(leader) = options.leader {
+    if let Some(leader) = leader {
         let mut stream = TcpStream::connect(&leader).unwrap();
 
         stream

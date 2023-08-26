@@ -1,6 +1,5 @@
-use crate::kv::Command;
-use crate::utils::Port;
 use regex::Regex;
+use rustkv::Command;
 use std::net::TcpListener;
 use std::{
     cell::RefCell,
@@ -8,14 +7,10 @@ use std::{
     net::TcpStream,
 };
 
-pub struct StartWebserverOptions {
-    pub kv_port: Port,
-}
-
-pub(crate) fn start_webserver(options: StartWebserverOptions) {
+pub(crate) fn main() {
     // TODO make the port a config option
     let listener = TcpListener::bind("localhost:3333").unwrap();
-    let kv_port = options.kv_port;
+    let kv_port = 1338;
     let kv_stream = RefCell::new(TcpStream::connect(format!("localhost:{kv_port}")).unwrap());
     let kv_stream_ref = &kv_stream;
     let mut reader = BufReader::new(kv_stream_ref.borrow_mut().try_clone().unwrap());

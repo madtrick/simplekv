@@ -1,22 +1,15 @@
-use crate::{
-    kv::{Command, Message},
-    utils::Port,
-};
 use easy_repl::{command, CommandStatus, Repl};
+use rustkv::{Command, Message};
 use std::{
     cell::RefCell,
     io::{BufRead, BufReader, Write},
     net::TcpStream,
 };
 
-pub struct StartReplOptions {
-    pub kv_port: Port,
-}
-
-pub(crate) fn start_repl(options: StartReplOptions) {
+pub(crate) fn main() {
     // TODO: the connection might be refused if the server thread was scheduled later than the repl
     // thread
-    let kv_port = options.kv_port;
+    let kv_port = 1338;
     let stream = RefCell::new(TcpStream::connect(format!("localhost:{kv_port}")).unwrap());
     let stream_ref = &stream;
     let mut reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
