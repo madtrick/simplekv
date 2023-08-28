@@ -2,6 +2,8 @@
 
 - Splitting the key namespace creates a problem. With the original design (primary/backups) the sequence number had the same semantics across all nodes. Now that each node is the owner of a portion of the namespace each one has it's own sequence.
 - I can create one log file per node & namespace. So when a node replicates values from another node it will write those to a separate logfile, where a sequence is kept.
+- Each node will run multiple KV stores. One for the namespace it owns and one for each namespace it replicates.
+- Having one sequence per namespace won't work if I move to consistent hashing. Or if I was to increase/decrease the size of the cluster. I would have to merge different namespaces where the same sequence number might have different meanings.
 
 # 27-08-2023
 

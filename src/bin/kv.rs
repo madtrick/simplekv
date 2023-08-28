@@ -8,7 +8,8 @@ use std::io::{BufRead, BufReader, Result as IOResult, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::{collections::HashMap, net::TcpListener};
+use std::vec;
+use std::{collections::HashMap, net::TcpListener, time::Duration};
 
 struct ReplicationPeer {
     pub peer: String,
@@ -164,6 +165,77 @@ impl CommandLog {
     }
 }
 
+fn handle_replica_stream(stream: TcpStream, kv: KV, command_log: CommandLog) {
+    let stream = RefCell::new(stream);
+    let stream_ref = &stream;
+    let kv = &RefCell::new(kv);
+    let command_log = &RefCell::new(command_log);
+
+    let buf_reader = BufReader::new(stream_ref.borrow_mut().try_clone().unwrap());
+
+    for line in buf_reader.lines() {
+        let request_line_string = line.unwrap();
+        println!("MESSAGE {}", request_line_string);
+        if request_line_string == "PING" {
+            println!("PING request");
+            stream_ref.borrow_mut().write_all(b"PONG\n").unwrap();
+            continue;
+        }
+
+        let message = serde_json::from_str::<Message>(&request_line_string).unwrap();
+        println!("{:?}", message);
+
+        match message {
+            Message::ConnectOk(ConnectOk { map }) => {
+                for (key, value) in map {
+                    kv.borrow_mut().set(key, value)
+                }
+            }
+            Message::ReplicationCommand(replication) => {
+                println!("Replication {:?}", replication);
+                let command = replication.command;
+                let sequence = replication.sequence;
+
+                match command {
+                    Command::Set { ref key, ref value } => {
+                        println!("KV server: SET {} = {}", key, value);
+                        // let sequence = command_log.write().unwrap().append(Command::Set {
+                        //     key: key.clone(),
+                        //     value: value.clone(),
+                        // });
+
+                        let sequence = command_log
+                            .borrow_mut()
+                            .replicated_append(&command, sequence);
+
+                        println!("Sequence {}", sequence);
+                        kv.borrow_mut().set(key.clone(), value.clone());
+                    }
+                    Command::Get { key: _ } => {
+                        panic!("GET commands can't be replicated")
+                    }
+                    Command::Delete { ref key } => {
+                        println!("KV server: DEL {}", key);
+                        command_log
+                            .borrow_mut()
+                            .replicated_append(&command, sequence);
+                        kv.borrow_mut().del(key);
+                    }
+                }
+            }
+            _ => panic!("Unhandled message"),
+        }
+    }
+
+    // This is needed when the exiting thread is one handle a connection for a replication peer
+    // if let Some(replication_peer) = replication_peer {
+    //     replication_peers
+    //         .write()
+    //         .unwrap()
+    //         .swap_remove(replication_peer);
+    // }
+}
+
 fn handle_stream(
     stream: TcpStream,
     kv: Arc<RwLock<KV>>,
@@ -287,45 +359,7 @@ fn handle_stream(
                 }
                 _ => panic!("Unexpected connect payload"),
             },
-            Message::ConnectOk(ConnectOk { map }) => {
-                for (key, value) in map {
-                    kv.write().unwrap().set(key, value)
-                }
-            }
-            Message::ReplicationCommand(replication) => {
-                println!("Replication {:?}", replication);
-                let command = replication.command;
-                let sequence = replication.sequence;
-
-                match command {
-                    Command::Set { ref key, ref value } => {
-                        println!("KV server: SET {} = {}", key, value);
-                        // let sequence = command_log.write().unwrap().append(Command::Set {
-                        //     key: key.clone(),
-                        //     value: value.clone(),
-                        // });
-
-                        let sequence = command_log
-                            .write()
-                            .unwrap()
-                            .replicated_append(&command, sequence);
-
-                        println!("Sequence {}", sequence);
-                        kv.write().unwrap().set(key.clone(), value.clone());
-                    }
-                    Command::Get { key: _ } => {
-                        panic!("GET commands can't be replicated")
-                    }
-                    Command::Delete { ref key } => {
-                        println!("KV server: DEL {}", key);
-                        command_log
-                            .write()
-                            .unwrap()
-                            .replicated_append(&command, sequence);
-                        kv.write().unwrap().del(key);
-                    }
-                }
-            }
+            _ => panic!("Unexpected message"),
         }
 
         // This is needed when the the stream opened for the REPL or webserver
@@ -356,6 +390,15 @@ struct Args {
     id: String,
 }
 
+fn open_replica_stream(address: &str) -> TcpStream {
+    loop {
+        match TcpStream::connect(address) {
+            Ok(stream) => return stream,
+            Err(_) => thread::sleep(Duration::from_millis(4000)),
+        }
+    }
+}
+
 pub fn main() {
     let args = Args::parse();
     let node_id = args.id;
@@ -367,61 +410,73 @@ pub fn main() {
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
         command_log.read().unwrap().filename(),
     )));
+    let replications = HashMap::from([
+        (1338 as u16, vec!["1339", "1340"]),
+        (1339 as u16, vec!["1338", "1340"]),
+        (1340 as u16, vec!["1338", "1339"]),
+    ]);
     let replication_peers: Vec<ReplicationPeer> = Vec::new();
     let replication_peers = Arc::new(RwLock::new(replication_peers));
 
-    if let Some(leader) = leader {
-        let mut stream = TcpStream::connect(&leader).unwrap();
+    match replications.get(&port) {
+        Some(replicas) => {
+            for leader_port in replicas {
+                let mut stream = open_replica_stream(format!("localhost:{}", leader_port).as_str());
 
-        stream
-            .write_all(
-                format!(
-                    "{}\n",
-                    serde_json::to_string(&Message::Connect(Connect {
-                        // TODO: do we need to send the address of the peer. The KV could get it
-                        // from the connection
-                        from: format!("localhost:{port}") // TODO: include current sequence number in the replica
-                    }))
-                    .unwrap()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "{}\n",
+                            serde_json::to_string(&Message::Connect(Connect {
+                                // TODO: do we need to send the address of the peer. The KV could get it
+                                // from the connection
+                                from: format!("localhost:{port}") // TODO: include current sequence number in the replica
+                            }))
+                            .unwrap()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                let replica_command_log = CommandLog::new(format!("log.{node_id}.{leader_port}"));
+                let replica_kv = KV::init_from_logfile(command_log.read().unwrap().filename());
 
-        handle_stream(stream, kv, command_log, replication_peers)
-    } else {
-        for stream in listener.incoming() {
-            let stream = stream.unwrap();
-            println!(
-                "KV server: Accepted connection {}",
-                stream.peer_addr().unwrap()
-            );
-            /*
-             * Clone the Arc to increase the refererence count and also
-             * let the thread closure move this clone
-             */
-            let kv = kv.clone();
-            let command_log = command_log.clone();
-            let replication_peers = replication_peers.clone();
-
-            thread::spawn(move || {
-                handle_stream(
-                    stream.try_clone().unwrap(),
-                    kv,
-                    command_log,
-                    replication_peers,
-                );
-                println!("Thread exiting {}", stream.peer_addr().unwrap());
-            });
+                thread::spawn(|| handle_replica_stream(stream, replica_kv, replica_command_log));
+            }
         }
-
-        // if options.is_leader {
-        //     start_ping(StartPingOptions {
-        //         peers: options.peers,
-        //     });
-        // }
-        //
-
-        // handle.join();
+        None => panic!("Unknown port"),
     }
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+        println!(
+            "KV server: Accepted connection {}",
+            stream.peer_addr().unwrap()
+        );
+        /*
+         * Clone the Arc to increase the refererence count and also
+         * let the thread closure move this clone
+         */
+        let kv = kv.clone();
+        let command_log = command_log.clone();
+        let replication_peers = replication_peers.clone();
+
+        thread::spawn(move || {
+            handle_stream(
+                stream.try_clone().unwrap(),
+                kv,
+                command_log,
+                replication_peers,
+            );
+            println!("Thread exiting {}", stream.peer_addr().unwrap());
+        });
+    }
+
+    // if options.is_leader {
+    //     start_ping(StartPingOptions {
+    //         peers: options.peers,
+    //     });
+    // }
+    //
+
+    // handle.join();
 }
