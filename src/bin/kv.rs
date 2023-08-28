@@ -1,13 +1,13 @@
+use clap::Parser;
+use regex::Regex;
 use rustkv::{Command, Connect, ConnectOk, Message, ReplicationCommand};
+use std::cell::RefCell;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Result as IOResult, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, RwLock};
 use std::thread;
-
-use regex::Regex;
-use std::cell::RefCell;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::{collections::HashMap, net::TcpListener};
 
 struct ReplicationPeer {
@@ -335,6 +335,8 @@ fn handle_stream(
         }
     }
 
+    println!("ADIEU");
+
     // This is needed when the exiting thread is one handle a connection for a replication peer
     if let Some(replication_peer) = replication_peer {
         replication_peers
@@ -344,10 +346,22 @@ fn handle_stream(
     }
 }
 
+#[derive(Parser)]
+struct Args {
+    #[arg(long)]
+    port: String,
+
+    // Id of the KV node
+    #[arg(long)]
+    id: String,
+}
+
 pub fn main() {
-    let port = 1338;
-    let node_id = 1;
+    let args = Args::parse();
+    let node_id = args.id;
+    let port = args.port.parse::<u16>().unwrap();
     let leader: Option<String> = None;
+    println!("Listening on port {}", port);
     let listener = TcpListener::bind(format!("localhost:{port}")).unwrap();
     let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
