@@ -10,6 +10,8 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::vec;
 use std::{collections::HashMap, net::TcpListener, time::Duration};
+use zookeeper::ZkError;
+use zookeeper::{Acl, CreateMode, WatchedEvent, Watcher, ZooKeeper};
 
 struct ReplicationPeer {
     pub peer: String,
@@ -398,8 +400,50 @@ fn open_replica_stream(address: &str) -> TcpStream {
         }
     }
 }
+struct LoggingWatcher;
+impl Watcher for LoggingWatcher {
+    fn handle(&self, e: WatchedEvent) {
+        // TODO: use the info! macro
+        println!("{:?}", e)
+    }
+}
 
 pub fn main() {
+    let zk = ZooKeeper::connect("localhost:2181", Duration::from_secs(15), LoggingWatcher).unwrap();
+    let create_namespace = zk.create(
+        "/namespace",
+        vec![],
+        Acl::open_unsafe().clone(),
+        CreateMode::Persistent,
+    );
+
+    match create_namespace {
+        Err(ZkError::NodeExists) => (),
+        Err(_) => panic!("Unexpected error"),
+        _ => (),
+    }
+
+    let create_nodes = zk.create(
+        "/nodes",
+        vec![],
+        Acl::open_unsafe().clone(),
+        CreateMode::Persistent,
+    );
+
+    match create_nodes {
+        Err(ZkError::NodeExists) => (),
+        Err(_) => panic!("Unexpected error"),
+        _ => (),
+    }
+
+    let create_nodes = zk.create(
+        "/nodes/node-",
+        vec![],
+        Acl::open_unsafe().clone(),
+        CreateMode::EphemeralSequential,
+    );
+}
+pub fn main_2() {
     let args = Args::parse();
     let node_id = args.id;
     let port = args.port.parse::<u16>().unwrap();

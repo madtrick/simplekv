@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  # kv:
+  #   build:
+  #     context: .
+  #     target: builder
+  #   volumes:
+  #     - .:/app/
+  #   command: cargo watch --why -x 'run --bin kv -- --port 1337 --id 2' -i "log.*"
+  #   depends_on:
+  #     - zookeeper
+  zookeeper:
+    image: zookeeper
+    restart: always
+    ports:
+      - 2181:2181
+  zookeeper-cli:
+    image: zookeeper
+    command: zkCli.sh -server zookeeper
