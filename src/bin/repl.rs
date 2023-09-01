@@ -1,12 +1,14 @@
 use easy_repl::{command, CommandStatus, Repl};
-use rustkv::{Command, Message};
+use rustkv::{Command, Message, NamespaceAllocation};
 use std::collections::HashMap;
+use std::time::Duration;
 use std::{
     cell::RefCell,
     io::{BufRead, BufReader, Write},
     net::TcpStream,
     ops::RangeInclusive,
 };
+use zookeeper::{Acl, CreateMode, WatchedEvent, Watcher, ZooKeeper};
 
 fn select_key_owner(key: &str, owners: &HashMap<String, RangeInclusive<char>>) -> Option<String> {
     match key.chars().next() {
@@ -23,23 +25,34 @@ fn select_key_owner(key: &str, owners: &HashMap<String, RangeInclusive<char>>) -
     }
 }
 
+struct LoggingWatcher;
+impl Watcher for LoggingWatcher {
+    fn handle(&self, e: WatchedEvent) {
+        // TODO: use the info! macro
+        println!("{:?}", e)
+    }
+}
+
 pub(crate) fn main() {
+    let zk = ZooKeeper::connect("localhost:2181", Duration::from_secs(15), LoggingWatcher).unwrap();
+    let (allocations_binary, _) = zk.get_data("/allocations", false).unwrap();
+    let allocations =
+        bincode::deserialize::<Vec<NamespaceAllocation>>(&allocations_binary).unwrap();
+
     // TODO: the connection might be refused if the server thread was scheduled later than the repl
     // thread
-    let kv_nodes_addresses = vec!["localhost:1338", "localhost:1339", "localhost:1340"];
-    let ownership = &RefCell::new(HashMap::from([
-        ("localhost:1338".to_string(), 'a'..='h'),
-        ("localhost:1339".to_string(), 'i'..='q'),
-        ("localhost:1340".to_string(), 'r'..='z'),
-    ]));
+    let mut ownership = HashMap::new();
     let streams: &RefCell<HashMap<String, RefCell<TcpStream>>> = &RefCell::new(HashMap::new());
 
-    for address in kv_nodes_addresses {
+    for allocation in allocations {
+        ownership.insert(allocation.node.clone(), allocation.range);
         streams.borrow_mut().insert(
-            address.to_string(),
-            RefCell::new(TcpStream::connect(address).unwrap()),
+            allocation.node.to_string(),
+            RefCell::new(TcpStream::connect(allocation.node).unwrap()),
         );
     }
+
+    let ownership = &RefCell::new(ownership);
 
     let mut repl = Repl::builder()
         .add(

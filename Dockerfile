@@ -20,5 +20,13 @@ COPY . .
 COPY --from=cacher /app/target target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 RUN cargo install cargo-watch
+# RUN cargo install --profile release --path . --root .
 CMD []
 
+# # Step 4:
+# # Create a tiny output image.
+# # It only contains our final binary.
+# FROM rust:1.70 as runtime
+# WORKDIR app
+# COPY --from=builder /app/bin/kv /usr/local/bin
+# ENTRYPOINT ["/usr/local/bin/kv"]

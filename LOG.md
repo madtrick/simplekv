@@ -1,3 +1,8 @@
+# 01-09-2023
+
+- In the coordinator I'm checking if a zookeeper node exists or not before trying to create it. What kind of scenarios I'd have to consider if zookeeper was running across multiple nodes and there was the possibility of a split brain
+- Though maybe the above point 👆 is not a problem because ZK is a CP system https://stackoverflow.com/questions/35387774/is-zookeeper-always-consistent-in-terms-of-cap-theorem. One side of the split can create the same node again.
+
 # 29-08-2023
 
 - Rust compile times on Docker can be too long. Use `cargo-chef` to speed them up https://www.lpalmieri.com/posts/fast-rust-docker-builds/

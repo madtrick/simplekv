@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Command {
@@ -30,4 +30,10 @@ pub enum Message {
 pub struct ReplicationCommand {
     pub command: Command,
     pub sequence: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NamespaceAllocation {
+    pub node: String,
+    pub range: RangeInclusive<char>,
 }

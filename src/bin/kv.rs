@@ -1,5 +1,6 @@
 use clap::Parser;
 use regex::Regex;
+use rustkv::NamespaceAllocation;
 use rustkv::{Command, Connect, ConnectOk, Message, ReplicationCommand};
 use std::cell::RefCell;
 use std::fs::File;
@@ -10,7 +11,6 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::vec;
 use std::{collections::HashMap, net::TcpListener, time::Duration};
-use zookeeper::ZkError;
 use zookeeper::{Acl, CreateMode, WatchedEvent, Watcher, ZooKeeper};
 
 struct ReplicationPeer {
@@ -389,7 +389,7 @@ struct Args {
 
     // Id of the KV node
     #[arg(long)]
-    id: String,
+    id: u8,
 }
 
 fn open_replica_stream(address: &str) -> TcpStream {
@@ -400,6 +400,7 @@ fn open_replica_stream(address: &str) -> TcpStream {
         }
     }
 }
+
 struct LoggingWatcher;
 impl Watcher for LoggingWatcher {
     fn handle(&self, e: WatchedEvent) {
@@ -409,85 +410,53 @@ impl Watcher for LoggingWatcher {
 }
 
 pub fn main() {
-    let zk = ZooKeeper::connect("localhost:2181", Duration::from_secs(15), LoggingWatcher).unwrap();
-    let create_namespace = zk.create(
-        "/namespace",
-        vec![],
-        Acl::open_unsafe().clone(),
-        CreateMode::Persistent,
-    );
-
-    match create_namespace {
-        Err(ZkError::NodeExists) => (),
-        Err(_) => panic!("Unexpected error"),
-        _ => (),
-    }
-
-    let create_nodes = zk.create(
-        "/nodes",
-        vec![],
-        Acl::open_unsafe().clone(),
-        CreateMode::Persistent,
-    );
-
-    match create_nodes {
-        Err(ZkError::NodeExists) => (),
-        Err(_) => panic!("Unexpected error"),
-        _ => (),
-    }
-
-    let create_nodes = zk.create(
-        "/nodes/node-",
-        vec![],
-        Acl::open_unsafe().clone(),
-        CreateMode::EphemeralSequential,
-    );
-}
-pub fn main_2() {
     let args = Args::parse();
     let node_id = args.id;
-    let port = args.port.parse::<u16>().unwrap();
-    let leader: Option<String> = None;
-    println!("Listening on port {}", port);
-    let listener = TcpListener::bind(format!("localhost:{port}")).unwrap();
+    let port = args.port;
+
+    let listening_address = format!("localhost:{port}");
+    println!("Listening at {}", listening_address);
+    let listener = TcpListener::bind(&listening_address).unwrap();
     let command_log = Arc::new(RwLock::new(CommandLog::new(format!("log.{node_id}"))));
     let kv = Arc::new(RwLock::new(KV::init_from_logfile(
         command_log.read().unwrap().filename(),
     )));
-    let replications = HashMap::from([
-        (1338 as u16, vec!["1339", "1340"]),
-        (1339 as u16, vec!["1338", "1340"]),
-        (1340 as u16, vec!["1338", "1339"]),
-    ]);
+    let zk = ZooKeeper::connect("localhost:2181", Duration::from_secs(15), LoggingWatcher).unwrap();
+
+    let (binary, _) = zk.get_data("/allocations", false).unwrap();
+    let allocations = bincode::deserialize::<Vec<NamespaceAllocation>>(&binary).unwrap();
+    let replicas: Vec<String> = allocations
+        .into_iter()
+        .filter(|allocation| allocation.node != listening_address)
+        .map(|allocation| allocation.node)
+        .collect::<Vec<String>>();
+
+    println!("Replicas {:?}", replicas);
+
     let replication_peers: Vec<ReplicationPeer> = Vec::new();
     let replication_peers = Arc::new(RwLock::new(replication_peers));
 
-    match replications.get(&port) {
-        Some(replicas) => {
-            for leader_port in replicas {
-                let mut stream = open_replica_stream(format!("localhost:{}", leader_port).as_str());
+    for replica in replicas {
+        let mut stream = open_replica_stream(&replica);
 
-                stream
-                    .write_all(
-                        format!(
-                            "{}\n",
-                            serde_json::to_string(&Message::Connect(Connect {
-                                // TODO: do we need to send the address of the peer. The KV could get it
-                                // from the connection
-                                from: format!("localhost:{port}") // TODO: include current sequence number in the replica
-                            }))
-                            .unwrap()
-                        )
-                        .as_bytes(),
-                    )
-                    .unwrap();
-                let replica_command_log = CommandLog::new(format!("log.{node_id}.{leader_port}"));
-                let replica_kv = KV::init_from_logfile(command_log.read().unwrap().filename());
+        stream
+            .write_all(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&Message::Connect(Connect {
+                        // TODO: do we need to send the address of the peer. The KV could get it
+                        // from the connection
+                        from: format!("localhost:{port}") // TODO: include current sequence number in the replica
+                    }))
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let replica_command_log = CommandLog::new(format!("log.{node_id}.{replica}"));
+        let replica_kv = KV::init_from_logfile(command_log.read().unwrap().filename());
 
-                thread::spawn(|| handle_replica_stream(stream, replica_kv, replica_command_log));
-            }
-        }
-        None => panic!("Unknown port"),
+        thread::spawn(|| handle_replica_stream(stream, replica_kv, replica_command_log));
     }
 
     for stream in listener.incoming() {

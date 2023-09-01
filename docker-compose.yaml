@@ -17,3 +17,12 @@ services:
   zookeeper-cli:
     image: zookeeper
     command: zkCli.sh -server zookeeper
+  coordinator:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app/
+    command: ./bin/coordinator
+    depends_on:
+      - zookeeper
