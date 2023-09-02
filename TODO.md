@@ -1,0 +1,6 @@
+- If the replica for a node crashes/disconnects the replicated node must not accept writes
+- If the replica for a node crashes/disconnects it's initalized with the full map of the replicated node even though the replica local state might still be valid
+- The system could have parts of the namespace as read-only if any of the range owners crashes
+- When a new node is created to replace a crashed one it must recover its state from one of the replicas
+- When a new node is created to replace a crashed one it must recover its state from all available replicas (parallelization)
+- Nodes are assigned ranges as they connect to the coordinator. When they connect they can propose a range they want to handle because they have local state for it.

@@ -1,3 +1,11 @@
+# 02-09-2023
+
+- Right now the allocation of namespace items to the nodes is harcoded in the coordinator. If a node were to crash, another one would have to be created on the same host and port to be able to receive traffic
+- The connection to the new node from the REPL would have failed and only if the new node listens on the same host and port, would the repl be able to connect again.
+- The new code could instead register in the coordinator, indicating which range wants to take over. The coordinator would indicate from which replicas to recover. The new node would register with the coordinator. The repl could be listening to changes in ZK and pick up the new node.
+- If a node goes down, the repl could continue executing read-only queries against the replicas.
+-
+
 # 01-09-2023
 
 - In the coordinator I'm checking if a zookeeper node exists or not before trying to create it. What kind of scenarios I'd have to consider if zookeeper was running across multiple nodes and there was the possibility of a split brain
