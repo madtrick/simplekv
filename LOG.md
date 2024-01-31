@@ -1,3 +1,7 @@
+# 03-09-2023
+
+- Sometimes when I shutdown a node the coordinator doesn't get a watch notification. I create a persistent recursive watch and after adding a node I didn't get the notification (I checked with the ZK CLI and the node had been created)
+
 # 02-09-2023
 
 - Right now the allocation of namespace items to the nodes is harcoded in the coordinator. If a node were to crash, another one would have to be created on the same host and port to be able to receive traffic

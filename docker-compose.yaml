@@ -14,15 +14,18 @@ services:
     restart: always
     ports:
       - 2181:2181
+    environment:
+      ZOO_LOG4J_PROP: "DEBUG,CONSOLE"
+      ZOO_4LW_COMMANDS_WHITELIST: "*"
   zookeeper-cli:
     image: zookeeper
     command: zkCli.sh -server zookeeper
-  coordinator:
-    build:
-      context: .
-      target: builder
-    volumes:
-      - .:/app/
-    command: ./bin/coordinator
-    depends_on:
-      - zookeeper
+  # coordinator:
+  #   build:
+  #     context: .
+  #     target: builder
+  #   volumes:
+  #     - .:/app/
+  #   command: ./bin/coordinator
+  #   depends_on:
+  #     - zookeeper

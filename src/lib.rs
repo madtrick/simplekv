@@ -37,3 +37,9 @@ pub struct NamespaceAllocation {
     pub node: String,
     pub range: RangeInclusive<char>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Node {
+    pub node_id: u8,
+    pub address: String,
+}

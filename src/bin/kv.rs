@@ -1,7 +1,7 @@
 use clap::Parser;
 use regex::Regex;
-use rustkv::NamespaceAllocation;
 use rustkv::{Command, Connect, ConnectOk, Message, ReplicationCommand};
+use rustkv::{NamespaceAllocation, Node};
 use std::cell::RefCell;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -422,6 +422,18 @@ pub fn main() {
         command_log.read().unwrap().filename(),
     )));
     let zk = ZooKeeper::connect("localhost:2181", Duration::from_secs(15), LoggingWatcher).unwrap();
+
+    zk.create(
+        "/nodes/node",
+        bincode::serialize(&Node {
+            node_id,
+            address: listening_address.clone(),
+        })
+        .unwrap(),
+        Acl::open_unsafe().clone(),
+        CreateMode::EphemeralSequential,
+    )
+    .unwrap();
 
     let (binary, _) = zk.get_data("/allocations", false).unwrap();
     let allocations = bincode::deserialize::<Vec<NamespaceAllocation>>(&binary).unwrap();
